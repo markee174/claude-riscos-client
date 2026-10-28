@@ -4,8 +4,6 @@ A RISC OS desktop client for Claude, written in BBC BASIC.
 
 **Unofficial.** Not affiliated with or endorsed by Anthropic.
 
-![!Claude on the RISC OS desktop](screenshot.png)
-
 ## What it does
 
 !Claude puts an icon on the icon bar and opens a conversation window. Type in the field at the top, press Return, and Claude's reply appears in the window below. Requests run through curl in a TaskWindow, so the desktop keeps multitasking while you wait.
