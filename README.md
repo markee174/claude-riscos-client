@@ -47,7 +47,7 @@ Choices are saved in `<Choices$Write>.Claude.Choices`. **Your API key is stored 
 
 ## How it was made
 
-!Claude was written by Claude (Anthropic's AI) from a one-sentence prompt, then debugged over four rounds of feeding error messages back in. [I wrote about the experiment in WROCC magazine: link/issue.] The code is commented, but treat it as a working prototype rather than a polished product.
+!Claude was written by Claude (Anthropic's AI) from a one-sentence prompt, then debugged over four rounds of feeding error messages back in. This is a spare time passion project to learn about AI. The code is commented, but treat it as a working prototype rather than a polished product.
 
 ## Repository layout
 
