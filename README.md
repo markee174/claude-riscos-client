@@ -1,6 +1,6 @@
 # claude-riscos-client
 
-A RISC OS desktop client for Claude, written in BBC BASIC.
+A vibe-coded RISC OS desktop client for Claude, written in BBC BASIC.
 
 **Unofficial.** Not affiliated with or endorsed by Anthropic.
 
