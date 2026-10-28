@@ -17,7 +17,7 @@ It is deliberately simple:
 
 ## Requirements
 
-- RISC OS 5. Tested on [machine], RISC OS [version].
+- RISC OS 5. Tested on RISCOSbits FAST, RISC OS 5.30
 - curl with HTTPS support. curl is not in PackMan's default sources: add the riscos.info source first, then install curl:
   `pkg http://www.riscos.info/packages/pkg/autobuilt`
   Check it works by typing `curl --version` in a Task window (Ctrl-F12).
