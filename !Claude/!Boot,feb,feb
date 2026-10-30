@@ -1,0 +1,3 @@
+| !Boot for !Claude
+If "<Claude$Dir>"="" Then Set Claude$Dir <Obey$Dir>
+IconSprites <Obey$Dir>.!Sprites

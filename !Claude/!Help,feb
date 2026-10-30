@@ -1,0 +1,27 @@
+Claude 0.01 (26 Oct 2026)
+=========================
+
+A desktop client for Claude, using the Anthropic Messages API.
+
+Requirements
+  RISC OS 5 (desktop font text painting needs Wimp 3.80 or later).
+  curl with TLS, installed from PackMan and reachable on Run$Path.
+  An Anthropic API key from https://console.anthropic.com.
+  A claude.ai subscription does not work here: the API bills
+  per token, separately.
+
+Use
+  Click SELECT on the icon bar icon to open the conversation.
+  Type in the field at the top and press Return or click Send.
+  MENU over the window: Clear, Choices.
+  MENU over the icon bar icon: Info, Choices, Quit.
+
+Choices
+  Saved to <Choices$Write>.Claude.Choices in plain text,
+  API key included.
+
+Limits
+  Text only. No streaming, no attachments, no saved transcripts.
+  The conversation lives in memory and is lost on Quit.
+  Markdown shows as typed (**bold**, # headings).
+  Characters outside Latin-1 show as "?".
