@@ -1,0 +1,987 @@
+REM Copyright 2026 Mark Stephens
+REM Licensed under the Apache License, Version 2.0 (the "License");
+REM you may not use this file except in compliance with the License.
+REM You may obtain a copy of the License at
+REM http://www.apache.org/licenses/LICENSE-2.0
+REM Distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS
+REM OF ANY KIND, either express or implied.
+
+REM >!RunImage for !Claude
+REM A RISC OS desktop client for the Anthropic Messages API.
+REM Draft 0.04 (26 Oct 2026). Not yet tested on RISC OS hardware.
+REM Requests go through curl in a TaskWindow, so the desktop keeps
+REM multitasking while Claude replies.
+
+task%=0 : scrap$=""
+DIM errblk% 260
+ON ERROR SYS "Wimp_ReportError",FNerr(REPORT$+" (line "+STR$ERL+")"),1,"Claude" : PROCcleanup : END
+PROCinit
+ON ERROR PROCerror
+WHILE NOT quit%
+  PROCpoll
+ENDWHILE
+PROCcleanup
+END
+
+REM ---------------------------------------------------------------
+REM Start-up
+REM ---------------------------------------------------------------
+
+REM Set constants, claim buffers, start the Wimp task and build the UI.
+DEF PROCinit
+app$="Claude" : version$="0.04 (26 Oct 2026)"
+toolh%=96 : lh%=40 : margin%=16 : maxl%=8000 : bufsize%=256*1024
+quit%=FALSE : busy%=FALSE : lastw%=0 : avail%=0 : started%=0
+DIM blk% 1024, blk2% 64, ws% 64, ext% 16, ptr% 32
+DIM inbuf% 1024, keybuf% 256, modelbuf% 64, certbuf% 256, titlebuf% 64
+DIM hist% bufsize%, disp% bufsize%, resp% bufsize%
+DIM ls%(maxl%), ll%(maxl%), lc%(maxl%)
+histlen%=0 : displen%=0 : resplen%=0 : nlines%=0 : recstart%=0 : prevhist%=0
+?inbuf%=0 : $titlebuf%=app$
+PROCloadchoices
+DIM msgs% 8 : msgs%!0=&502 : msgs%!4=0
+SYS "Wimp_Initialise",380,&4B534154,app$,msgs% TO ,task%
+PROCscratch
+PROCcreatewindows
+PROCcreatemenus
+PROCiconbar
+ENDPROC
+
+REM Create the scrap directory and work out canonical names for the
+REM files shared with curl.
+DEF PROCscratch
+LOCAL t%
+SYS "XOS_ReadVarVal","Wimp$ScrapDir",blk%,-1,0,0 TO ,,t%
+IF t%=0 THEN ERROR 1,"Wimp$ScrapDir is not set, so Claude has nowhere to put temporary files."
+SYS "OS_File",8,"<Wimp$ScrapDir>.Claude",,,0
+scrap$=FNcanon("<Wimp$ScrapDir>.Claude")
+req$=scrap$+".Request" : cfg$=scrap$+".Config" : obey$=scrap$+".Fetch"
+out$=scrap$+".Reply" : err$=scrap$+".Errors" : done$=scrap$+".Done"
+ENDPROC
+
+REM Return the canonical form of path p$.
+DEF FNcanon(p$)
+SYS "OS_FSControl",37,p$,blk%,0,0,1024
+=FNcstr(blk%)
+
+REM ---------------------------------------------------------------
+REM Windows, icons and menus
+REM ---------------------------------------------------------------
+
+REM Build the Info, Choices, conversation and toolbar pane windows.
+DEF PROCcreatewindows
+REM Info window: four label and display-field rows.
+PROCwin(400,400,1040,660,&84000012,1,0,-260,640,0,FNstr("About this program"),19,0,8)
+PROCinforow(0,-20,"Name",app$)
+PROCinforow(2,-76,"Purpose","Chat with Claude")
+PROCinforow(4,-132,"Author","Mark Stephens")
+PROCinforow(6,-188,"Version",version$)
+SYS "Wimp_CreateWindow",,blk% TO infow%
+REM Choices window: three writable fields, Cancel and Set.
+PROCwin(300,400,1060,672,&87000012,1,0,-272,760,0,FNstr("Claude choices"),15,0,8)
+PROClabel(0,-20,"API key")
+PROCfield(1,204,-20,744,keybuf%,256,"Pptr_write;Kta;D*")
+PROClabel(2,-76,"Model")
+PROCfield(3,204,-76,744,modelbuf%,64,"Pptr_write;Kta")
+PROClabel(4,-132,"CA file")
+PROCfield(5,204,-132,744,certbuf%,256,"Pptr_write;Kta")
+PROCbutton(6,404,-244,564,-188,"Cancel","R5,3")
+PROCbutton(7,580,-252,748,-180,"Set","R6,3")
+SYS "Wimp_CreateWindow",,blk% TO choicesw%
+REM Conversation window: white work area, painted by PROCredraw.
+PROCwin(200,240,1000,900,&BF000002,0,0,-1000,2000,0,titlebuf%,64,3,0)
+blk%!68=600+(400<<16)
+SYS "Wimp_CreateWindow",,blk% TO mainw%
+REM Toolbar pane: message field and default Send button.
+PROCwin(0,0,800,toolh%,&80000030,1,0,-toolh%,2000,0,0,0,3,2)
+PROCfield(0,16,-22,624,inbuf%,1024,"Pptr_write")
+PROCbutton(1,640,-84,784,-12,"Send","R6,3")
+SYS "Wimp_CreateWindow",,blk% TO panew%
+ENDPROC
+
+REM Fill blk% with a window definition. tptr% is an indirected title
+REM buffer of tlen% bytes, or 0 for no title. btype% is the work area
+REM button type and nic% the number of icons that follow.
+DEF PROCwin(x0%,y0%,x1%,y1%,flags%,bg%,ex0%,ey0%,ex1%,ey1%,tptr%,tlen%,btype%,nic%)
+blk%!0=x0% : blk%!4=y0% : blk%!8=x1% : blk%!12=y1%
+blk%!16=0 : blk%!20=0 : blk%!24=-1 : blk%!28=flags%
+blk%?32=7 : blk%?33=2 : blk%?34=7 : blk%?35=bg%
+blk%?36=3 : blk%?37=1 : blk%?38=12 : blk%?39=0
+blk%!40=ex0% : blk%!44=ey0% : blk%!48=ex1% : blk%!52=ey1%
+IF tptr%=0 THEN blk%!56=0 ELSE blk%!56=&13D
+blk%!60=btype%<<12 : blk%!64=1 : blk%!68=0
+blk%!72=tptr% : blk%!76=-1 : blk%!80=tlen% : blk%!84=nic%
+ENDPROC
+
+REM Write indirected icon n% into the window definition in blk%.
+DEF PROCicon(n%,x0%,y0%,x1%,y1%,flags%,tptr%,vptr%,len%)
+LOCAL a%
+a%=blk%+88+32*n%
+a%!0=x0% : a%!4=y0% : a%!8=x1% : a%!12=y1% : a%!16=flags%
+a%!20=tptr% : a%!24=vptr% : a%!28=len%
+ENDPROC
+
+REM Right-aligned label, 180 units wide, with its top edge at y%.
+DEF PROClabel(n%,y%,t$)
+PROCicon(n%,12,y%-52,192,y%,&17000311,FNstr(t$),-1,LEN t$+1)
+ENDPROC
+
+REM Writable field using buffer buf% of len% bytes.
+DEF PROCfield(n%,x0%,y1%,x1%,buf%,len%,v$)
+PROCicon(n%,x0%,y1%-52,x1%,y1%,&0700F135,buf%,FNstr(v$),len%)
+ENDPROC
+
+REM Action button; v$ "R5,3" for an action, "R6,3" for the default.
+DEF PROCbutton(n%,x0%,y0%,x1%,y1%,t$,v$)
+PROCicon(n%,x0%,y0%,x1%,y1%,&1700313D,FNstr(t$),FNstr(v$),LEN t$+1)
+ENDPROC
+
+REM Label and display field pair for the Info window.
+DEF PROCinforow(n%,y%,l$,v$)
+PROCicon(n%,12,y%-48,192,y%,&17000311,FNstr(l$),-1,LEN l$+1)
+PROCicon(n%+1,204,y%-48,628,y%,&17000135,FNstr(v$),FNstr("R2"),LEN v$+1)
+ENDPROC
+
+REM Build the icon bar menu and the conversation window menu.
+DEF PROCcreatemenus
+ibmenu%=FNnewmenu(app$,3)
+PROCitem(ibmenu%,0,"Info",infow%,0)
+PROCitem(ibmenu%,1,"Choices...",-1,0)
+PROCitem(ibmenu%,2,"Quit",-1,&80)
+winmenu%=FNnewmenu(app$,2)
+PROCitem(winmenu%,0,"Clear",-1,0)
+PROCitem(winmenu%,1,"Choices...",-1,&80)
+curmenu%=0 : menux%=0 : menuy%=0
+ENDPROC
+
+REM Claim and fill a menu header for n% items; return its address.
+DEF FNnewmenu(t$,n%)
+DIM menup% 28+24*n%
+$menup%=t$
+menup%?12=7 : menup%?13=2 : menup%?14=7 : menup%?15=0
+menup%!16=LEN t$*16+16 : menup%!20=44 : menup%!24=0
+=menup%
+
+REM Fill item i% of menu m% with indirected text t$, submenu sub%
+REM and item flags f% (&80 marks the last item).
+DEF PROCitem(m%,i%,t$,sub%,f%)
+LOCAL a%
+a%=m%+28+24*i%
+a%!0=f% : a%!4=sub% : a%!8=&07000121
+a%!12=FNstr(t$) : a%!16=-1 : a%!20=LEN t$+1
+IF LEN t$*16+16>m%!16 THEN m%!16=LEN t$*16+16
+ENDPROC
+
+REM Put the !claude sprite on the right of the icon bar.
+DEF PROCiconbar
+blk%!0=-1 : blk%!4=0 : blk%!8=0 : blk%!12=68 : blk%!16=68
+blk%!20=&301A : $(blk%+24)="!claude"
+SYS "Wimp_CreateIcon",,blk% TO ibicon%
+ENDPROC
+
+REM Claim a buffer holding s$ and return its address.
+DEF FNstr(s$)
+DIM strp% LEN s$+1
+$strp%=s$
+=strp%
+
+REM ---------------------------------------------------------------
+REM Event handling
+REM ---------------------------------------------------------------
+
+REM Poll the Wimp once. While a request runs, ask for null events
+REM every half second so PROCcheckreply can look for the reply.
+DEF PROCpoll
+LOCAL r%,t%
+IF busy% THEN
+  SYS "OS_ReadMonotonicTime" TO t%
+  SYS "Wimp_PollIdle",&1830,blk%,t%+50 TO r%
+ELSE
+  SYS "Wimp_Poll",&1831,blk% TO r%
+ENDIF
+CASE r% OF
+  WHEN 0 : PROCcheckreply
+  WHEN 1 : IF blk%!0=mainw% THEN PROCredraw
+  WHEN 2 : IF blk%!0=mainw% THEN PROCopenmain ELSE SYS "Wimp_OpenWindow",,blk%
+  WHEN 3 : PROCclosereq
+  WHEN 6 : PROCclick
+  WHEN 8 : PROCkey
+  WHEN 9 : PROCmenusel
+  WHEN 17,18 : PROCmessage
+ENDCASE
+ENDPROC
+
+REM Open the conversation window from the open block in blk%, keep
+REM the toolbar pane on top of it, and rewrap if the width changed.
+DEF PROCopenmain
+LOCAL b%,w%
+SYS "Wimp_OpenWindow",,blk%
+SYS "Wimp_GetWindowState",,blk%
+b%=blk%!28
+IF b%=panew% THEN blk2%!0=panew% : SYS "Wimp_GetWindowState",,blk2% : b%=blk2%!28
+blk2%!0=panew%
+blk2%!4=blk%!4 : blk2%!8=blk%!16-toolh% : blk2%!12=blk%!12 : blk2%!16=blk%!16
+blk2%!20=0 : blk2%!24=0 : blk2%!28=b%
+SYS "Wimp_OpenWindow",,blk2%
+blk%!28=panew%
+SYS "Wimp_OpenWindow",,blk%
+w%=blk%!12-blk%!4
+IF w%<>lastw% THEN lastw%=w% : PROCresizepane(w%) : PROCrewrap
+ENDPROC
+
+REM Stretch the message field and move Send to suit width w%.
+DEF PROCresizepane(w%)
+SYS "Wimp_ResizeIcon",panew%,0,16,-74,w%-176,-22
+SYS "Wimp_ResizeIcon",panew%,1,w%-160,-84,w%-16,-12
+SYS "Wimp_ForceRedraw",panew%,0,-toolh%,2000,0
+ENDPROC
+
+REM Close a window; the conversation window takes its pane with it.
+DEF PROCclosereq
+IF blk%!0=mainw% THEN blk2%!0=panew% : SYS "Wimp_CloseWindow",,blk2%
+SYS "Wimp_CloseWindow",,blk%
+ENDPROC
+
+REM Open the conversation window at the front with the caret in it.
+DEF PROCshowmain
+blk%!0=mainw% : SYS "Wimp_GetWindowState",,blk%
+blk%!28=-1
+PROCopenmain
+SYS "Wimp_SetCaretPosition",panew%,0,0,0,-1,FNclen(inbuf%)
+ENDPROC
+
+REM Handle a mouse click (buttons: 4 SELECT, 2 MENU, 1 ADJUST).
+DEF PROCclick
+LOCAL x%,y%,b%,w%,i%
+x%=blk%!0 : y%=blk%!4 : b%=blk%!8 : w%=blk%!12 : i%=blk%!16
+CASE TRUE OF
+  WHEN b%=2 AND w%=-2 : PROCshowmenu(ibmenu%,x%-64,96+44*3)
+  WHEN b%=2 AND (w%=mainw% OR w%=panew%) : PROCshowmenu(winmenu%,x%-64,y%)
+  WHEN w%=-2 : PROCshowmain
+  WHEN w%=panew% AND i%=1 : PROCsend
+  WHEN w%=choicesw% AND i%=7 : PROCsetchoices(b%)
+  WHEN w%=choicesw% AND i%=6 : PROCcancelchoices(b%)
+ENDCASE
+ENDPROC
+
+REM Return sends a message or confirms Choices; Escape cancels Choices.
+DEF PROCkey
+LOCAL w%,k%
+w%=blk%!0 : k%=blk%!24
+CASE TRUE OF
+  WHEN w%=panew% AND k%=13 : PROCsend
+  WHEN w%=choicesw% AND k%=13 : PROCsetchoices(4)
+  WHEN w%=choicesw% AND k%=27 : PROCcancelchoices(4)
+  OTHERWISE SYS "Wimp_ProcessKey",k%
+ENDCASE
+ENDPROC
+
+REM Open menu m% and remember it for menu selections.
+DEF PROCshowmenu(m%,x%,y%)
+curmenu%=m% : menux%=x% : menuy%=y%
+SYS "Wimp_CreateMenu",,m%,x%,y%
+ENDPROC
+
+REM Act on a menu choice; ADJUST keeps the menu open.
+DEF PROCmenusel
+LOCAL s%
+s%=blk%!0
+SYS "Wimp_GetPointerInfo",,ptr%
+CASE curmenu% OF
+  WHEN ibmenu% :
+    CASE s% OF
+      WHEN 1 : PROCopenchoices
+      WHEN 2 : quit%=TRUE
+    ENDCASE
+  WHEN winmenu% :
+    CASE s% OF
+      WHEN 0 : PROCclear
+      WHEN 1 : PROCopenchoices
+    ENDCASE
+ENDCASE
+IF (ptr%!8 AND 1) AND NOT quit% THEN SYS "Wimp_CreateMenu",,curmenu%,menux%,menuy%
+ENDPROC
+
+REM Handle Message_Quit and Message_HelpRequest.
+DEF PROCmessage
+CASE blk%!16 OF
+  WHEN 0 : quit%=TRUE
+  WHEN &502 : PROChelp
+ENDCASE
+ENDPROC
+
+REM Answer an interactive help request for window blk%!32, icon blk%!36.
+DEF PROChelp
+LOCAL t$
+t$=FNhelp(blk%!32,blk%!36)
+IF t$="" THEN ENDPROC
+blk%!12=blk%!8 : blk%!16=&503
+$(blk%+20)=t$ : blk%?(20+LEN t$)=0
+blk%!0=(24+LEN t$) AND NOT 3
+SYS "Wimp_SendMessage",17,blk%,blk%!4
+ENDPROC
+
+REM Return help text for icon i% in window w%, or "".
+DEF FNhelp(w%,i%)
+LOCAL h$
+h$=""
+CASE w% OF
+  WHEN -2 : h$="This is the Claude icon.|MClick SELECT to open the conversation window.|MClick MENU for Info, Choices and Quit."
+  WHEN mainw% : h$="This window shows your conversation with Claude.|MClick MENU to clear it or change your choices."
+  WHEN panew% :
+    CASE i% OF
+      WHEN 1 : h$="Click SELECT to send your message to Claude."
+      OTHERWISE h$="Type a message to Claude, then press Return to send it."
+    ENDCASE
+  WHEN choicesw% :
+    CASE i% OF
+      WHEN 1 : h$="Enter your Anthropic API key, from console.anthropic.com."
+      WHEN 3 : h$="Enter a model name, for example claude-sonnet-5-5."
+      WHEN 5 : h$="Optional: the full pathname of a CA certificate file for curl. Leave it empty unless curl reports a certificate error."
+      WHEN 6 : h$="Click SELECT to close this window without saving.|MClick ADJUST to restore the saved values."
+      WHEN 7 : h$="Click SELECT to save these choices and close this window.|MClick ADJUST to save them and keep it open."
+      OTHERWISE h$="Set your API key and model here."
+    ENDCASE
+  WHEN infow% : h$="This window shows information about Claude."
+ENDCASE
+=h$
+
+REM ---------------------------------------------------------------
+REM Choices
+REM ---------------------------------------------------------------
+
+REM Read key$, model$ and cert$ from Choices:Claude.Choices.
+DEF PROCloadchoices
+LOCAL f%,l$
+key$="" : model$="claude-sonnet-5-5" : cert$=""
+f%=OPENIN "Choices:Claude.Choices"
+IF f%=0 THEN ENDPROC
+WHILE NOT EOF#f%
+  l$=GET$#f%
+  IF LEFT$(l$,4)="Key:" THEN key$=MID$(l$,5)
+  IF LEFT$(l$,6)="Model:" THEN model$=MID$(l$,7)
+  IF LEFT$(l$,7)="CAFile:" THEN cert$=MID$(l$,8)
+ENDWHILE
+CLOSE#f%
+ENDPROC
+
+REM Write the choices to <Choices$Write>.Claude.Choices.
+DEF PROCsavechoices
+LOCAL f%
+SYS "OS_File",8,"<Choices$Write>.Claude",,,0
+f%=OPENOUT "<Choices$Write>.Claude.Choices"
+PROCline(f%,"Key:"+key$)
+PROCline(f%,"Model:"+model$)
+PROCline(f%,"CAFile:"+cert$)
+CLOSE#f%
+ENDPROC
+
+REM Copy the current choices into the Choices window and open it.
+DEF PROCopenchoices
+PROCfillchoices
+blk%!0=choicesw% : SYS "Wimp_GetWindowState",,blk%
+blk%!28=-1 : SYS "Wimp_OpenWindow",,blk%
+SYS "Wimp_SetCaretPosition",choicesw%,1,0,0,-1,LEN key$
+ENDPROC
+
+REM Put key$, model$ and cert$ into the writable fields and redraw them.
+DEF PROCfillchoices
+$keybuf%=key$ : $modelbuf%=model$ : $certbuf%=cert$
+PROCredrawicon(choicesw%,1) : PROCredrawicon(choicesw%,3) : PROCredrawicon(choicesw%,5)
+ENDPROC
+
+REM Save the Choices window fields; SELECT (b%=4) also closes it.
+DEF PROCsetchoices(b%)
+key$=FNtrim(FNcstr(keybuf%))
+model$=FNtrim(FNcstr(modelbuf%))
+cert$=FNtrim(FNcstr(certbuf%))
+IF model$="" THEN model$="claude-sonnet-5-5"
+PROCsavechoices
+IF b%<>1 THEN blk2%!0=choicesw% : SYS "Wimp_CloseWindow",,blk2%
+ENDPROC
+
+REM Cancel: SELECT closes the window, ADJUST restores the saved values.
+DEF PROCcancelchoices(b%)
+IF b%=1 THEN PROCfillchoices ELSE blk2%!0=choicesw% : SYS "Wimp_CloseWindow",,blk2%
+ENDPROC
+
+REM Ask the Wimp to redraw icon i% of window w%.
+DEF PROCredrawicon(w%,i%)
+blk2%!0=w% : blk2%!4=i% : blk2%!8=0 : blk2%!12=0
+SYS "Wimp_SetIconState",,blk2%
+ENDPROC
+
+REM ---------------------------------------------------------------
+REM Sending a message
+REM ---------------------------------------------------------------
+
+REM Add the typed message to the conversation and start curl.
+DEF PROCsend
+LOCAL n%,i%,c%
+IF busy% THEN ENDPROC
+n%=FNclen(inbuf%)
+IF n%=0 THEN ENDPROC
+IF key$="" THEN PROCreport("Set your Anthropic API key in Choices first.") : PROCopenchoices : ENDPROC
+prevhist%=histlen%
+PROCdispbyte(1)
+i%=0
+WHILE i%<n%
+  c%=inbuf%?i%
+  IF c%>=32 THEN PROCdispbyte(c%)
+  i%+=1
+ENDWHILE
+PROChistbegin(1) : PROChistesc(inbuf%,n%) : PROChistend
+PROCdelscratch
+PROCwritereq : PROCwritecfg : PROCwriteobey
+SYS "Wimp_StartTask","TaskWindow ""Obey "+obey$+""" -name ""Claude request"" -wimpslot 8192K -quit"
+?inbuf%=0 : PROCredrawicon(panew%,0)
+SYS "Wimp_SetCaretPosition",panew%,0,0,0,-1,0
+SYS "OS_ReadMonotonicTime" TO started%
+busy%=TRUE : PROCbusyui
+PROCrefresh
+ENDPROC
+
+REM Write the JSON request body: model, token limit, whole history.
+DEF PROCwritereq
+LOCAL f%,p%,n%
+f%=OPENOUT req$
+PROCput(f%,"{""model"":"""+model$+""",""max_tokens"":4096,""messages"":[")
+p%=0
+WHILE p%<histlen%
+  IF p%>0 THEN PROCput(f%,",")
+  n%=hist%!(p%+4)
+  IF hist%?p%=1 THEN PROCput(f%,"{""role"":""user"",""content"":""") ELSE PROCput(f%,"{""role"":""assistant"",""content"":""")
+  IF n%>0 THEN SYS "OS_GBPB",2,f%,hist%+p%+8,n%
+  PROCput(f%,"""}")
+  p%=(p%+8+n%+3) AND NOT 3
+ENDWHILE
+PROCput(f%,"]}")
+CLOSE#f%
+ENDPROC
+
+REM Write the curl config file. The API key lives here rather than on
+REM the command line; PROCdelscratch removes it after each request.
+DEF PROCwritecfg
+LOCAL f%
+f%=OPENOUT cfg$
+PROCline(f%,"url = ""https://api.anthropic.com/v1/messages""")
+PROCline(f%,"header = ""x-api-key: "+key$+"""")
+PROCline(f%,"header = ""anthropic-version: 2023-06-01""")
+PROCline(f%,"header = ""content-type: application/json""")
+PROCline(f%,"data-binary = ""@"+req$+"""")
+PROCline(f%,"output = """+out$+"""")
+PROCline(f%,"stderr = """+err$+"""")
+PROCline(f%,"silent")
+PROCline(f%,"show-error")
+PROCline(f%,"max-time = 170")
+IF cert$<>"" THEN PROCline(f%,"cacert = """+cert$+"""")
+CLOSE#f%
+ENDPROC
+
+REM Write the Obey file the TaskWindow runs: curl, then a marker file.
+DEF PROCwriteobey
+LOCAL f%
+f%=OPENOUT obey$
+PROCline(f%,"curl -K "+cfg$)
+PROCline(f%,"Create "+done$)
+CLOSE#f%
+ENDPROC
+
+REM Shade Send and retitle the window while a request runs.
+DEF PROCbusyui
+IF busy% THEN $titlebuf%=app$+" (waiting for a reply)" ELSE $titlebuf%=app$
+blk2%!0=panew% : blk2%!4=1 : blk2%!12=1<<22
+IF busy% THEN blk2%!8=1<<22 ELSE blk2%!8=0
+SYS "Wimp_SetIconState",,blk2%
+SYS "Wimp_ForceRedraw",mainw%,&4B534154,3
+ENDPROC
+
+REM ---------------------------------------------------------------
+REM Receiving the reply
+REM ---------------------------------------------------------------
+
+REM On each null event, look for the marker file or give up after 3 min.
+DEF PROCcheckreply
+LOCAL t%
+IF NOT busy% THEN ENDPROC
+IF FNlen(done$)>=0 THEN PROCfinish : ENDPROC
+SYS "OS_ReadMonotonicTime" TO t%
+IF t%-started%>18000 THEN PROCfail("No reply after three minutes. Check that curl is installed and on Run$Path.")
+ENDPROC
+
+REM Load curl's output and parse it.
+DEF PROCfinish
+LOCAL n%
+busy%=FALSE : PROCbusyui
+n%=FNlen(out$)
+IF n%<=0 THEN PROCfail("curl: "+FNsmall(err$)) : ENDPROC
+IF n%>=bufsize% THEN PROCfail("The reply is too large to display.") : ENDPROC
+SYS "OS_File",255,out$,resp%,0
+resp%?n%=0 : resplen%=n%
+PROCdelscratch
+PROCparse
+PROCrefresh
+ENDPROC
+
+REM Show error m$, drop the unanswered message from the history.
+DEF PROCfail(m$)
+busy%=FALSE : PROCbusyui
+PROCdelscratch
+histlen%=prevhist%
+PROCdispbyte(3) : PROCdispstr(m$)
+PROCrefresh
+ENDPROC
+
+REM Pull the text blocks out of the Messages API reply in resp%.
+DEF PROCparse
+LOCAL p%,e%,got%
+p%=FNfindkey("type",0)
+IF p%>=0 THEN
+  IF FNmatch(p%,"error""") THEN
+    e%=FNfindkey("message",p%)
+    IF e%>=0 THEN PROCfail("API: "+FNjson(e%)) ELSE PROCfail("API error: "+FNpreview)
+    ENDPROC
+  ENDIF
+ENDIF
+got%=FALSE : p%=0
+REPEAT
+  p%=FNfindkey("text",p%)
+  IF p%>=0 THEN
+    e%=FNstrend(p%)
+    IF NOT got% THEN PROChistbegin(2) : PROCdispbyte(2) : got%=TRUE
+    PROChistcopy(p%,e%)
+    PROCdecode(p%,e%)
+    p%=e%+1
+  ENDIF
+UNTIL p%<0
+IF NOT got% THEN PROCfail("Unexpected reply: "+FNpreview) : ENDPROC
+PROChistend
+p%=FNfindkey("stop_reason",0)
+IF p%>=0 THEN IF FNmatch(p%,"max_tokens") THEN PROCdispbyte(3) : PROCdispstr("The reply reached the 4096-token limit and stopped early.")
+ENDPROC
+
+REM Find "k$": "  in resp% from offset p%. Return the offset of the
+REM string value's first character, or -1.
+DEF FNfindkey(k$,p%)
+LOCAL q$,n%,i%,j%,ok%,r%
+q$=""""+k$+"""" : n%=LEN q$ : r%=-1
+WHILE r%<0 AND p%+n%<=resplen%
+  IF resp%?p%=34 THEN
+    ok%=TRUE : i%=1
+    WHILE ok% AND i%<n%
+      IF resp%?(p%+i%)<>ASC MID$(q$,i%+1,1) THEN ok%=FALSE
+      i%+=1
+    ENDWHILE
+    IF ok% THEN
+      j%=FNskipws(p%+n%)
+      IF resp%?j%=58 THEN
+        j%=FNskipws(j%+1)
+        IF resp%?j%=34 THEN r%=j%+1
+      ENDIF
+    ENDIF
+  ENDIF
+  p%+=1
+ENDWHILE
+=r%
+
+REM Skip JSON whitespace from offset p%.
+DEF FNskipws(p%)
+WHILE p%<resplen% AND (resp%?p%=32 OR resp%?p%=9 OR resp%?p%=10 OR resp%?p%=13)
+  p%+=1
+ENDWHILE
+=p%
+
+REM Return the offset of the quote that ends the string starting at p%.
+DEF FNstrend(p%)
+WHILE p%<resplen% AND resp%?p%<>34
+  IF resp%?p%=92 THEN p%+=2 ELSE p%+=1
+ENDWHILE
+=p%
+
+REM TRUE if resp% holds s$ at offset p%.
+DEF FNmatch(p%,s$)
+LOCAL i%,ok%
+ok%=TRUE
+FOR i%=1 TO LEN s$
+  IF resp%?(p%+i%-1)<>ASC MID$(s$,i%,1) THEN ok%=FALSE
+NEXT
+=ok%
+
+REM Decode the JSON string at p% into a BASIC string of up to 200 chars.
+DEF FNjson(p%)
+LOCAL s$,c%
+s$=""
+WHILE p%<resplen% AND resp%?p%<>34 AND LEN s$<200
+  c%=resp%?p%
+  IF c%=92 THEN p%+=1 : c%=resp%?p% : IF c%=110 THEN c%=32
+  IF c%>=128 THEN c%=63
+  s$+=CHR$c% : p%+=1
+ENDWHILE
+=s$
+
+REM First 150 bytes of the reply, for errors nobody planned for.
+DEF FNpreview
+LOCAL s$,i%,c%
+s$="" : i%=0
+WHILE i%<resplen% AND i%<150
+  c%=resp%?i% : IF c%<32 OR c%>=127 THEN c%=32
+  s$+=CHR$c% : i%+=1
+ENDWHILE
+=s$
+
+REM First 200 bytes of file f$, or a hint if it is missing or empty.
+DEF FNsmall(f$)
+LOCAL f%,s$,c%
+s$="no reply and no error text. Check that curl is installed and on Run$Path."
+IF FNlen(f$)>0 THEN
+  f%=OPENIN f$ : s$=""
+  WHILE NOT EOF#f% AND LEN s$<200
+    c%=BGET#f% : IF c%<32 THEN c%=32
+    s$+=CHR$c%
+  ENDWHILE
+  CLOSE#f%
+ENDIF
+=s$
+
+REM Decode the JSON string between p% and e% into the display buffer.
+DEF PROCdecode(p%,e%)
+LOCAL c%,d%,u%,k%
+WHILE p%<e%
+  c%=resp%?p%
+  IF c%=92 THEN
+    d%=resp%?(p%+1) : p%+=2
+    CASE d% OF
+      WHEN 110 : PROCdispcode(10)
+      WHEN 116 : PROCdispcode(9)
+      WHEN 114,98,102 : REM \r \b \f: drop
+      WHEN 117 :
+        u%=EVAL("&"+FNbytes(p%,4)) : p%+=4
+        IF u%>=&D800 AND u%<=&DBFF THEN u%=&FFFD : IF resp%?p%=92 THEN p%+=6
+        PROCdispcode(u%)
+      OTHERWISE PROCdispcode(d%)
+    ENDCASE
+  ELSE
+    IF c%<128 THEN
+      PROCdispcode(c%) : p%+=1
+    ELSE
+      CASE TRUE OF
+        WHEN c%>=&F0 : u%=c% AND 7 : k%=3
+        WHEN c%>=&E0 : u%=c% AND 15 : k%=2
+        WHEN c%>=&C0 : u%=c% AND 31 : k%=1
+        OTHERWISE u%=&FFFD : k%=0
+      ENDCASE
+      p%+=1
+      WHILE k%>0 AND p%<e%
+        u%=(u%<<6) OR (resp%?p% AND 63) : p%+=1 : k%-=1
+      ENDWHILE
+      PROCdispcode(u%)
+    ENDIF
+  ENDIF
+ENDWHILE
+ENDPROC
+
+REM n% bytes of resp% from p% as a string.
+DEF FNbytes(p%,n%)
+LOCAL s$
+s$=""
+WHILE n%>0
+  s$+=CHR$(resp%?p%) : p%+=1 : n%-=1
+ENDWHILE
+=s$
+
+REM Add Unicode character u% to the display buffer as Latin-1, with
+REM ASCII stand-ins for common typography and "?" for the rest.
+DEF PROCdispcode(u%)
+CASE TRUE OF
+  WHEN u%=10 : PROCdispbyte(10)
+  WHEN u%=9 : PROCdispstr("    ")
+  WHEN u%<32 : REM other control characters: drop
+  WHEN u%<128 : PROCdispbyte(u%)
+  WHEN u%<160 : PROCdispbyte(63)
+  WHEN u%<256 : PROCdispbyte(u%)
+  WHEN u%=&2018 OR u%=&2019 : PROCdispbyte(39)
+  WHEN u%=&201C OR u%=&201D : PROCdispbyte(34)
+  WHEN u%=&2013 OR u%=&2014 OR u%=&2212 : PROCdispbyte(45)
+  WHEN u%=&2026 : PROCdispstr("...")
+  WHEN u%=&2022 : PROCdispbyte(42)
+  OTHERWISE PROCdispbyte(63)
+ENDCASE
+ENDPROC
+
+REM ---------------------------------------------------------------
+REM Conversation history (JSON-ready, sent with every request)
+REM Record: role byte (1 user, 2 assistant), 3 pad bytes, length word,
+REM then the escaped JSON string content, padded to a word boundary.
+REM ---------------------------------------------------------------
+
+DEF PROChistbegin(role%)
+recstart%=histlen% : hist%?recstart%=role% : histlen%+=8
+ENDPROC
+
+DEF PROChistadd(c%)
+IF histlen%>=bufsize%-16 THEN ERROR 1,"The conversation is too long. Choose Clear from the menu."
+hist%?histlen%=c% : histlen%+=1
+ENDPROC
+
+DEF PROChistend
+hist%!(recstart%+4)=histlen%-recstart%-8
+histlen%=(histlen%+3) AND NOT 3
+ENDPROC
+
+REM Add n% Latin-1 bytes from a% with JSON escaping.
+DEF PROChistesc(a%,n%)
+LOCAL i%,c%,s$,j%
+i%=0
+WHILE i%<n%
+  c%=a%?i%
+  CASE TRUE OF
+    WHEN c%=34 OR c%=92 : PROChistadd(92) : PROChistadd(c%)
+    WHEN c%<32 OR c%>=128 :
+      s$="\u"+RIGHT$("000"+STR$~c%,4)
+      FOR j%=1 TO 6 : PROChistadd(ASC MID$(s$,j%,1)) : NEXT
+    OTHERWISE PROChistadd(c%)
+  ENDCASE
+  i%+=1
+ENDWHILE
+ENDPROC
+
+REM Copy reply bytes p% to e% unchanged: they are already JSON.
+DEF PROChistcopy(p%,e%)
+WHILE p%<e%
+  PROChistadd(resp%?p%) : p%+=1
+ENDWHILE
+ENDPROC
+
+REM ---------------------------------------------------------------
+REM Display buffer and layout
+REM Paragraphs start with a marker byte: 1 you, 2 Claude, 3 error.
+REM Lines: ls% start offset (-1 heading, -2 blank), ll% length, lc% colour.
+REM ---------------------------------------------------------------
+
+DEF PROCdispbyte(c%)
+IF displen%<bufsize%-8 THEN disp%?displen%=c% : displen%+=1
+ENDPROC
+
+DEF PROCdispstr(s$)
+LOCAL i%
+IF s$="" THEN ENDPROC
+FOR i%=1 TO LEN s$ : PROCdispbyte(ASC MID$(s$,i%,1)) : NEXT
+ENDPROC
+
+REM Empty the conversation, unless a request is running.
+DEF PROCclear
+IF busy% THEN ENDPROC
+histlen%=0 : displen%=0
+PROCrefresh
+ENDPROC
+
+REM Rewrap, then scroll to the newest text if the window is open.
+DEF PROCrefresh
+IF lastw%=0 THEN ENDPROC
+PROCrewrap
+PROCscrollend
+ENDPROC
+
+REM Break the display buffer into lines that fit the window width.
+DEF PROCrewrap
+LOCAL p%,c%,e%,col%
+avail%=lastw%-2*margin%
+nlines%=0 : p%=0
+WHILE p%<displen%
+  c%=disp%?p% : p%+=1 : e%=p%
+  WHILE e%<displen% AND disp%?e%>3
+    e%+=1
+  ENDWHILE
+  IF c%=3 THEN col%=3 ELSE col%=0
+  PROCaddline(-1,0,c%)
+  PROCwrappara(p%,e%,col%)
+  PROCaddline(-2,0,0)
+  p%=e%
+ENDWHILE
+PROCsetextent
+SYS "Wimp_ForceRedraw",mainw%,0,-&1000000,4000,0
+ENDPROC
+
+REM Wrap one paragraph (offsets s% to e%) at spaces where possible.
+DEF PROCwrappara(s%,e%,col%)
+LOCAL p%,st%,sp%,l$,c%,brk%
+p%=s% : st%=s% : sp%=-1 : l$=""
+WHILE p%<e%
+  c%=disp%?p%
+  IF c%=10 THEN
+    PROCaddline(st%,p%-st%,col%) : p%+=1 : st%=p% : sp%=-1 : l$=""
+  ELSE
+    IF LEN l$>=250 THEN brk%=TRUE ELSE brk%=(FNwidth(l$+CHR$c%)>avail%)
+    IF brk% AND p%>st% THEN
+      IF sp%>st% THEN
+        PROCaddline(st%,sp%-st%,col%) : p%=sp%+1
+      ELSE
+        PROCaddline(st%,p%-st%,col%)
+      ENDIF
+      st%=p% : sp%=-1 : l$=""
+    ELSE
+      l$+=CHR$c% : IF c%=32 THEN sp%=p%
+      p%+=1
+    ENDIF
+  ENDIF
+ENDWHILE
+IF p%>st% THEN PROCaddline(st%,p%-st%,col%)
+ENDPROC
+
+DEF PROCaddline(s%,n%,c%)
+IF nlines%<maxl% THEN ls%(nlines%)=s% : ll%(nlines%)=n% : lc%(nlines%)=c% : nlines%+=1
+ENDPROC
+
+REM Width of s$ in the desktop font, in OS units.
+DEF FNwidth(s$)
+LOCAL w%
+SYS "Wimp_TextOp",1,s$,0 TO w%
+=w%
+
+REM Size the work area to the text, never smaller than the window.
+DEF PROCsetextent
+LOCAL h%
+ws%!0=mainw% : SYS "Wimp_GetWindowState",,ws%
+h%=toolh%+16+nlines%*lh%
+IF h%<ws%!16-ws%!8 THEN h%=ws%!16-ws%!8
+ext%!0=0 : ext%!4=-h% : ext%!8=2000 : ext%!12=0
+SYS "Wimp_SetExtent",mainw%,ext%
+ENDPROC
+
+REM Scroll the open conversation window to its last line.
+DEF PROCscrollend
+LOCAL i%
+ws%!0=mainw% : SYS "Wimp_GetWindowState",,ws%
+IF (ws%!32 AND (1<<16))=0 THEN ENDPROC
+FOR i%=0 TO 28 STEP 4 : blk%!i%=ws%!i% : NEXT
+blk%!24=-(toolh%+16+nlines%*lh%)
+PROCopenmain
+ENDPROC
+
+REM Paint the visible lines in the desktop font.
+DEF PROCredraw
+LOCAL more%,ox%,oy%,a%,b%,y%,s$
+SYS "Wimp_RedrawWindow",,blk% TO more%
+WHILE more%
+  ox%=blk%!4-blk%!20 : oy%=blk%!16-blk%!24
+  a%=(oy%-blk%!40-toolh%-8) DIV lh%
+  b%=(oy%-blk%!32-toolh%-8) DIV lh%
+  IF a%<0 THEN a%=0
+  IF b%>nlines%-1 THEN b%=nlines%-1
+  WHILE a%<=b%
+    s$=""
+    CASE TRUE OF
+      WHEN ls%(a%)>=0 : s$=FNline(ls%(a%),ll%(a%))
+      WHEN ls%(a%)=-1 : s$=FNhead(lc%(a%))
+    ENDCASE
+    IF s$<>"" THEN
+      y%=oy%-toolh%-8-(a%+1)*lh%+10
+      SYS "Wimp_TextOp",0,FNcolour(ls%(a%),lc%(a%)),&FFFFFF00
+      SYS "Wimp_TextOp",2,s$,-1,-1,ox%+margin%,y%
+    ENDIF
+    a%+=1
+  ENDWHILE
+  SYS "Wimp_GetRectangle",,blk% TO more%
+ENDWHILE
+ENDPROC
+
+REM Display line text: n% bytes of disp% from s%.
+DEF FNline(s%,n%)
+LOCAL l$
+l$=""
+IF n%>255 THEN n%=255
+WHILE n%>0
+  l$+=CHR$(disp%?s%) : s%+=1 : n%-=1
+ENDWHILE
+=l$
+
+DEF FNhead(c%)
+LOCAL h$
+h$="Error"
+IF c%=1 THEN h$="You"
+IF c%=2 THEN h$="Claude"
+=h$
+
+REM Colour as &BBGGRR00: blue for you, orange for Claude, red errors.
+DEF FNcolour(s%,c%)
+LOCAL k%
+k%=0
+IF c%=3 THEN k%=&0000CC00
+IF s%=-1 AND c%=1 THEN k%=&99442200
+IF s%=-1 AND c%=2 THEN k%=&3264C800
+=k%
+
+REM ---------------------------------------------------------------
+REM Utilities
+REM ---------------------------------------------------------------
+
+REM Length of a control-terminated string at a%.
+DEF FNclen(a%)
+LOCAL n%
+n%=0
+WHILE a%?n%>=32
+  n%+=1
+ENDWHILE
+=n%
+
+REM Control-terminated string at a% as a BASIC string (max 255).
+DEF FNcstr(a%)
+LOCAL s$
+s$=""
+WHILE a%?0>=32 AND LEN s$<255
+  s$+=CHR$(a%?0) : a%+=1
+ENDWHILE
+=s$
+
+DEF FNtrim(s$)
+WHILE LEFT$(s$,1)=" "
+  s$=MID$(s$,2)
+ENDWHILE
+WHILE RIGHT$(s$,1)=" "
+  s$=LEFT$(s$,LEN s$-1)
+ENDWHILE
+=s$
+
+REM Length of file f$, or -1 if it is not a file.
+DEF FNlen(f$)
+LOCAL t%,l%
+SYS "XOS_File",17,f$ TO t%,,,,l%
+IF t%<>1 THEN l%=-1
+=l%
+
+DEF PROCput(f%,s$)
+LOCAL i%
+FOR i%=1 TO LEN s$ : BPUT#f%,ASC MID$(s$,i%,1) : NEXT
+ENDPROC
+
+DEF PROCline(f%,s$)
+PROCput(f%,s$) : BPUT#f%,10
+ENDPROC
+
+REM Delete the scrap files, including the config holding the API key.
+DEF PROCdelscratch
+SYS "XOS_File",6,req$ : SYS "XOS_File",6,cfg$ : SYS "XOS_File",6,obey$
+SYS "XOS_File",6,out$ : SYS "XOS_File",6,err$ : SYS "XOS_File",6,done$
+ENDPROC
+
+REM Build a RISC OS error block holding m$.
+DEF FNerr(m$)
+m$=LEFT$(m$,250)
+!errblk%=0 : $(errblk%+4)=m$ : errblk%?(4+LEN m$)=0
+=errblk%
+
+DEF PROCreport(m$)
+SYS "Wimp_ReportError",FNerr(m$),1,app$
+ENDPROC
+
+REM Report an error; Cancel quits, OK carries on.
+DEF PROCerror
+LOCAL r%
+SYS "Wimp_ReportError",FNerr(REPORT$+" (line "+STR$ERL+")"),3,app$ TO ,r%
+IF r%=2 THEN quit%=TRUE
+ENDPROC
+
+DEF PROCcleanup
+IF scrap$<>"" THEN PROCdelscratch
+IF task%<>0 THEN SYS "Wimp_CloseDown",task%,&4B534154
+ENDPROC
