@@ -9,6 +9,13 @@ All notable changes to !Claude. Version numbers match `!Help` and the Info box.
 - Text files are sent in full as part of your message. JPEG, PNG, GIF, WebP and PDF files are sent as image and document blocks with the next message; the conversation history keeps a note of them, so later messages do not resend them.
 - The window title shows how many files are attached. Attachments are cleared once Claude replies, and kept if the request fails so you can send again.
 - Up to 8 files and 3MB per message. !Claude checks file contents, not file types, and warns about anything Claude cannot read.
+- The hourglass shows while an attached file loads and is checked, and while a message with attachments is prepared for sending.
+- A grey note in the conversation confirms each attached file, with its kind and size, for example "Attached photo (JPEG image, 121KB)". Remove all also leaves a note.
+- Dropping a file on the icon bar icon opens the conversation window, so you can see the note.
+- Saving from the conversation window. The window menu has **Save conversation**, **Save reply** and **Save code**, each opening a standard Save as box: drag the icon to a Filer window, or type a full pathname and click Save.
+- **Save code** saves the code blocks from Claude's last reply. Code marked as BASIC is saved as BASIC text (&FD1), ready to run; Obey code as an Obey file; anything else as Text.
+- Save items are shaded when there is nothing to save.
+- The starter CLAUDE.md now asks Claude to put code in fenced blocks with the language named, which Save code relies on.
 
 ### Changed
 - WimpSlot raised from 1024K to 5120K to hold attachments.

@@ -13,7 +13,8 @@ Requirements
 Use
   Click SELECT on the icon bar icon to open the conversation.
   Type in the field at the top and press Return or click Send.
-  MENU over the window: Clear, Choices.
+  MENU over the window: Save conversation, Save reply,
+  Save code, Clear, Choices.
   MENU over the icon bar icon: Info, Choices, Quit.
 
 Choices
@@ -28,6 +29,15 @@ Attaching files
   files are sent as images and documents; later messages only
   carry a note that they were attached. Up to 8 files, 3MB in all.
   Convert Sprites and other images to JPEG or PNG first.
+  The hourglass shows while files load, and a grey note in the
+  conversation confirms each file attached.
+
+Saving
+  MENU over the window: Save conversation, Save reply and Save
+  code each open a Save as box. Drag its icon to a Filer window,
+  or type a full pathname and click Save. Save code saves the
+  code blocks from Claude's last reply; BBC BASIC code is saved
+  as BASIC text, ready to run.
 
 CLAUDE.md
   Instructions sent to Claude with every message, for example

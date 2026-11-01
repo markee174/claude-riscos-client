@@ -40,13 +40,16 @@ DIM attbuf% attmax%, pathbuf% 256, attlist% 256, tmpbuf% 256
 DIM attname$(maxatt%), attkind%(maxatt%), attmedia$(maxatt%), attoff%(maxatt%), attlen%(maxatt%)
 natt%=0 : attused%=0 : saveref%=0 : saveleaf$="" : ?pathbuf%=0
 DIM b64tab% 64, b64buf% 65536
+REM Saving: sav% holds the text being saved, built when a Save submenu opens.
+DIM sav% bufsize%, savenamebuf% 256, sprname% 16, drag% 40
+savelen%=0 : savetype%=&FFF : saveout%=0 : dragging%=FALSE
 $b64tab%="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
 DIM hist% bufsize%, disp% bufsize%, resp% bufsize%
 DIM ls%(maxl%), ll%(maxl%), lc%(maxl%)
 histlen%=0 : displen%=0 : resplen%=0 : nlines%=0 : recstart%=0 : prevhist%=0
 ?inbuf%=0 : $titlebuf%=app$
 PROCloadchoices
-DIM msgs% 16 : msgs%!0=1 : msgs%!4=3 : msgs%!8=&502 : msgs%!12=0
+DIM msgs% 24 : msgs%!0=1 : msgs%!4=2 : msgs%!8=3 : msgs%!12=&502 : msgs%!16=&400C0 : msgs%!20=0
 SYS "Wimp_Initialise",380,&4B534154,app$,msgs% TO ,task%
 PROCscratch
 PROCcreatewindows
@@ -138,6 +141,14 @@ PROCicon(4,16,-208,744,-156,&17000111,FNstr("Drag files here or onto the convers
 PROCbutton(5,340,-284,540,-228,"Remove all","R5,3")
 PROCbutton(6,556,-292,744,-220,"OK","R6,3")
 SYS "Wimp_CreateWindow",,blk% TO attw%
+REM Save box, opened as a submenu: draggable file icon, name, Cancel, Save.
+PROCwin(400,400,920,652,&84000012,1,0,-252,520,0,FNstr("Save as"),8,0,4)
+$sprname%="file_fff"
+PROCicon(0,226,-96,294,-28,&0000611A,sprname%,1,16)
+PROCfield(1,16,-104,504,savenamebuf%,256,"Pptr_write;Kta")
+PROCbutton(2,160,-228,320,-172,"Cancel","R5,3")
+PROCbutton(3,336,-236,504,-164,"Save","R6,3")
+SYS "Wimp_CreateWindow",,blk% TO savew%
 ENDPROC
 
 REM Fill blk% with a window definition. tptr% is an indirected title
@@ -189,9 +200,12 @@ ibmenu%=FNnewmenu(app$,3)
 PROCitem(ibmenu%,0,"Info",infow%,0)
 PROCitem(ibmenu%,1,"Choices...",-1,0)
 PROCitem(ibmenu%,2,"Quit",-1,&80)
-winmenu%=FNnewmenu(app$,2)
-PROCitem(winmenu%,0,"Clear",-1,0)
-PROCitem(winmenu%,1,"Choices...",-1,&80)
+winmenu%=FNnewmenu(app$,5)
+PROCitem(winmenu%,0,"Save conversation",savew%,&08)
+PROCitem(winmenu%,1,"Save reply",savew%,&08)
+PROCitem(winmenu%,2,"Save code",savew%,&0A)
+PROCitem(winmenu%,3,"Clear",-1,0)
+PROCitem(winmenu%,4,"Choices...",-1,&80)
 curmenu%=0 : menux%=0 : menuy%=0
 ENDPROC
 
@@ -246,6 +260,7 @@ CASE r% OF
   WHEN 2 : IF blk%!0=mainw% THEN PROCopenmain ELSE SYS "Wimp_OpenWindow",,blk%
   WHEN 3 : PROCclosereq
   WHEN 6 : PROCclick
+  WHEN 7 : PROCdragend
   WHEN 8 : PROCkey
   WHEN 9 : PROCmenusel
   WHEN 17,18 : PROCmessage
@@ -306,7 +321,10 @@ CASE TRUE OF
   WHEN w%=choicesw% AND i%=9 : PROCeditinstructions
   WHEN w%=panew% AND i%=2 : PROCopenatt
   WHEN w%=attw% AND i%=3 : PROCaddpath
-  WHEN w%=attw% AND i%=5 : PROCclearatt
+  WHEN w%=savew% AND i%=0 AND (b% AND &50)<>0 : PROCstartdrag
+  WHEN w%=savew% AND i%=2 : SYS "Wimp_CreateMenu",,-1
+  WHEN w%=savew% AND i%=3 : PROCsavebutton
+  WHEN w%=attw% AND i%=5 : PROCremoveatt
   WHEN w%=attw% AND i%=6 : IF b%<>1 THEN blk2%!0=attw% : SYS "Wimp_CloseWindow",,blk2%
 ENDCASE
 ENDPROC
@@ -320,6 +338,8 @@ CASE TRUE OF
   WHEN w%=choicesw% AND k%=13 : PROCsetchoices(4)
   WHEN w%=choicesw% AND k%=27 : PROCcancelchoices(4)
   WHEN w%=attw% AND k%=13 : PROCaddpath
+  WHEN w%=savew% AND k%=13 : PROCsavebutton
+  WHEN w%=savew% AND k%=27 : SYS "Wimp_CreateMenu",,-1
   WHEN w%=attw% AND k%=27 : blk2%!0=attw% : SYS "Wimp_CloseWindow",,blk2%
   OTHERWISE SYS "Wimp_ProcessKey",k%
 ENDCASE
@@ -328,6 +348,7 @@ ENDPROC
 REM Open menu m% and remember it for menu selections.
 DEF PROCshowmenu(m%,x%,y%)
 curmenu%=m% : menux%=x% : menuy%=y%
+IF m%=winmenu% THEN PROCshadesave
 SYS "Wimp_CreateMenu",,m%,x%,y%
 ENDPROC
 
@@ -344,8 +365,8 @@ CASE curmenu% OF
     ENDCASE
   WHEN winmenu% :
     CASE s% OF
-      WHEN 0 : PROCclear
-      WHEN 1 : PROCopenchoices
+      WHEN 3 : PROCclear
+      WHEN 4 : PROCopenchoices
     ENDCASE
 ENDCASE
 IF (ptr%!8 AND 1) AND NOT quit% THEN SYS "Wimp_CreateMenu",,curmenu%,menux%,menuy%
@@ -356,7 +377,9 @@ DEF PROCmessage
 CASE blk%!16 OF
   WHEN 0 : quit%=TRUE
   WHEN 1 : PROCdatasave
+  WHEN 2 : PROCdatasaveack
   WHEN 3 : PROCdataload
+  WHEN &400C0 : PROCmenuwarn
   WHEN &502 : PROChelp
 ENDCASE
 ENDPROC
@@ -378,7 +401,14 @@ LOCAL h$
 h$=""
 CASE w% OF
   WHEN -2 : h$="This is the Claude icon.|MClick SELECT to open the conversation window.|MClick MENU for Info, Choices and Quit."
-  WHEN mainw% : h$="This window shows your conversation with Claude.|MDrag files here to attach them to your next message.|MClick MENU to clear it or change your choices."
+  WHEN mainw% : h$="This window shows your conversation with Claude.|MDrag files here to attach them to your next message.|MClick MENU to save, clear or change your choices."
+  WHEN savew% :
+    CASE i% OF
+      WHEN 0 : h$="Drag this icon to a directory display to save the file."
+      WHEN 1 : h$="Enter a name for the file, or a full pathname and click Save."
+      WHEN 2 : h$="Click SELECT to close this box without saving."
+      WHEN 3 : h$="Click SELECT to save to the full pathname above."
+    ENDCASE
   WHEN panew% :
     CASE i% OF
       WHEN 1 : h$="Click SELECT to send your message to Claude, with any attached files."
@@ -495,7 +525,9 @@ WHILE i%<n%
 ENDWHILE
 PROChistbegin(1) : PROChistesc(inbuf%,n%) : PROCattachtext : PROChistend
 PROCdelscratch
+SYS "Hourglass_On"
 PROCwritereq : PROCwritecfg : PROCwriteobey
+SYS "Hourglass_Off"
 SYS "Wimp_StartTask","TaskWindow ""Obey "+obey$+""" -name ""Claude request"" -wimpslot 8192K -quit"
 ?inbuf%=0 : PROCredrawicon(panew%,0)
 SYS "Wimp_SetCaretPosition",panew%,0,0,0,-1,0
@@ -567,6 +599,7 @@ IF FNlen(f$)<0 THEN
   PROCline(f%,"You are chatting through !Claude, a desktop client on RISC OS.")
   PROCline(f%,"Replies appear as plain text in the desktop font, which shows Latin-1 characters only.")
   PROCline(f%,"Avoid Markdown formatting, tables and emoji.")
+  PROCline(f%,"Put code in ``` fenced blocks with the language named, for example ```basic, so it can be saved.")
   CLOSE#f%
   SYS "OS_File",18,f$,&FFF
 ENDIF
@@ -627,14 +660,17 @@ IF len%=0 THEN PROCwarn(n$+" is empty.") : ENDPROC
 IF natt%>=maxatt% THEN PROCwarn("You can attach up to "+STR$maxatt%+" files to one message.") : ENDPROC
 IF attused%+len%>attmax% THEN PROCwarn(n$+" is too large. Attachments to one message can total "+STR$(attmax% DIV 1048576)+"MB.") : ENDPROC
 a%=attbuf%+attused%
+SYS "Hourglass_On"
 SYS "OS_File",255,f$,a%,0
 k%=FNkind(a%,len%)
+SYS "Hourglass_Off"
 IF k%=0 THEN PROCwarn("Claude cannot read "+n$+". Attach text, JPEG, PNG, GIF, WebP or PDF files. Convert other images, such as Sprites, to JPEG or PNG first.") : ENDPROC
 attname$(natt%)=n$ : attkind%(natt%)=k% : attmedia$(natt%)=kmedia$
 attoff%(natt%)=attused% : attlen%(natt%)=len%
 attused%=(attused%+len%+3) AND NOT 3
 natt%+=1
 PROCsetattlist
+PROCnote("Attached "+n$+" ("+FNkindname(k%,kmedia$)+", "+FNsize(len%)+"). It will be sent with your next message.")
 ENDPROC
 
 REM Return the kind of the n% bytes at a% (0 if unsupported), setting
@@ -756,6 +792,46 @@ natt%=0 : attused%=0
 PROCsetattlist
 ENDPROC
 
+REM Remove all attachments at the user's request, and say so.
+DEF PROCremoveatt
+IF natt%=0 THEN ENDPROC
+PROCclearatt
+PROCnote("Removed all attached files.")
+ENDPROC
+
+REM Add a grey note paragraph to the conversation and show it.
+DEF PROCnote(m$)
+PROCdispbyte(4) : PROCdispstr(m$)
+PROCrefresh
+ENDPROC
+
+REM Describe attachment kind k% with media type m$.
+DEF FNkindname(k%,m$)
+LOCAL d$
+d$="text file"
+IF k%=3 THEN d$="PDF"
+IF k%=2 THEN d$=FNupper(MID$(m$,7))+" image"
+=d$
+
+REM s$ in upper case.
+DEF FNupper(s$)
+LOCAL i%,c%,u$
+u$=""
+FOR i%=1 TO LEN s$
+  c%=ASC MID$(s$,i%,1)
+  IF c%>=97 AND c%<=122 THEN c%-=32
+  u$+=CHR$c%
+NEXT
+=u$
+
+REM n% bytes as a short size: bytes, KB or MB.
+DEF FNsize(n%)
+LOCAL s$
+s$=STR$n%+" bytes"
+IF n%>=1024 THEN s$=STR$((n%+512) DIV 1024)+"KB"
+IF n%>=1048576 THEN s$=STR$(n% DIV 1048576)+"."+STR$((n% MOD 1048576)*10 DIV 1048576)+"MB"
+=s$
+
 REM Update the Attachments window list and the conversation window title.
 DEF PROCsetattlist
 LOCAL s$,i%
@@ -815,6 +891,7 @@ DEF FNdroptarget(w%)
 REM Another application wants to save data to us: ask for it in
 REM <Wimp$Scrap> and remember the leaf name it offered.
 DEF PROCdatasave
+IF blk%!4=task% THEN ENDPROC
 IF NOT FNdroptarget(blk%!20) THEN ENDPROC
 saveleaf$=FNcstr(blk%+44)
 blk%!12=blk%!8 : blk%!16=2 : blk%!36=-1
@@ -826,8 +903,9 @@ ENDPROC
 
 REM A file was dropped on one of our windows, or saved via <Wimp$Scrap>.
 DEF PROCdataload
-LOCAL f$,n$,t%,scrap%
-IF NOT FNdroptarget(blk%!20) THEN ENDPROC
+LOCAL f$,n$,t%,scrap%,w%
+w%=blk%!20
+IF NOT FNdroptarget(w%) THEN ENDPROC
 f$=FNcstr(blk%+44) : t%=blk%!40
 scrap%=(saveref%<>0 AND blk%!12=saveref%)
 IF scrap% THEN n$=saveleaf$ ELSE n$=FNleaf(f$)
@@ -836,6 +914,212 @@ blk%!12=blk%!8 : blk%!16=4
 SYS "Wimp_SendMessage",17,blk%,blk%!4
 IF t%=&1000 OR t%=&2000 THEN PROCwarn("Only files can be attached, not directories or applications: "+n$) ELSE PROCattach(f$,n$)
 IF scrap% THEN SYS "XOS_File",6,"<Wimp$Scrap>"
+IF w%=-2 THEN PROCshowmain
+ENDPROC
+
+REM ---------------------------------------------------------------
+REM Saving
+REM The window menu offers Save conversation, Save reply and Save code,
+REM each opening the Save as box. Files are saved by dragging its icon
+REM to a Filer window (Message_DataSave protocol) or by typing a full
+REM pathname and clicking Save.
+REM ---------------------------------------------------------------
+
+REM Shade Save menu items that would save nothing.
+DEF PROCshadesave
+LOCAL i%,a%
+FOR i%=0 TO 2
+  a%=winmenu%+28+24*i%+8
+  IF FNbuildsave(i%+1)>0 THEN !a%=!a% AND NOT (1<<22) ELSE !a%=!a% OR (1<<22)
+NEXT
+ENDPROC
+
+REM A Save item's submenu is about to open: fill the Save as box for it.
+DEF PROCmenuwarn
+LOCAL s$
+IF curmenu%<>winmenu% OR blk%!20<>savew% THEN ENDPROC
+savelen%=FNbuildsave(blk%!32+1)
+$savenamebuf%=savename$ : PROCredrawicon(savew%,1)
+s$=FNlower("file_"+RIGHT$("00"+STR$~savetype%,3))
+IF NOT FNspriteexists(s$) THEN s$="file_xxx"
+$sprname%=s$ : PROCredrawicon(savew%,0)
+SYS "Wimp_CreateSubMenu",,savew%,blk%!24,blk%!28
+ENDPROC
+
+REM TRUE if the Wimp sprite pool has sprite s$.
+DEF FNspriteexists(s$)
+LOCAL f%
+SYS "XWimp_SpriteOp",40,,s$ TO ;f%
+=((f% AND 1)=0)
+
+REM Build what kind k% saves into sav% and return its length:
+REM 1 whole conversation, 2 last reply, 3 code blocks in the last reply.
+REM Sets savename$ and savetype% to suit.
+DEF FNbuildsave(k%)
+LOCAL o%,p%,c%,rs%,re%
+o%=0 : savetype%=&FFF
+rs%=-1 : p%=0
+WHILE p%<displen%
+  IF disp%?p%=2 THEN rs%=p%+1
+  p%+=1
+ENDWHILE
+re%=displen%
+IF rs%>=0 THEN
+  p%=rs%
+  WHILE p%<displen% AND disp%?p%>4
+    p%+=1
+  ENDWHILE
+  re%=p%
+ENDIF
+CASE k% OF
+  WHEN 1 :
+    savename$="Conversation" : p%=0
+    WHILE p%<displen%
+      c%=disp%?p%
+      IF c%<5 THEN
+        IF o%>0 THEN o%=FNsavestr(o%,CHR$10+CHR$10)
+        CASE c% OF
+          WHEN 1 : o%=FNsavestr(o%,"You:"+CHR$10)
+          WHEN 2 : o%=FNsavestr(o%,"Claude:"+CHR$10)
+          WHEN 3 : o%=FNsavestr(o%,"Error:"+CHR$10)
+        ENDCASE
+      ELSE
+        IF o%<bufsize%-1 THEN sav%?o%=c% : o%+=1
+      ENDIF
+      p%+=1
+    ENDWHILE
+  WHEN 2 :
+    savename$="Reply"
+    IF rs%>=0 THEN
+      p%=rs%
+      WHILE p%<re%
+        sav%?o%=disp%?p% : o%+=1 : p%+=1
+      ENDWHILE
+    ENDIF
+  WHEN 3 :
+    savename$="Code"
+    IF rs%>=0 THEN o%=FNbuildcode(rs%,re%)
+ENDCASE
+=o%
+
+REM Copy the lines inside ``` fences between disp% offsets s% and e%
+REM into sav%. The first fence's language sets the file type.
+DEF FNbuildcode(s%,e%)
+LOCAL o%,p%,l%,inf%,first%,lang$
+o%=0 : p%=s% : inf%=FALSE : first%=TRUE
+WHILE p%<e%
+  l%=p%
+  WHILE l%<e% AND disp%?l%<>10
+    l%+=1
+  ENDWHILE
+  IF l%-p%>=3 AND disp%?p%=96 AND disp%?(p%+1)=96 AND disp%?(p%+2)=96 THEN
+    IF NOT inf% THEN
+      IF first% THEN lang$=FNlower(FNtrim(FNdispstr(p%+3,l%))) : first%=FALSE
+      IF o%>0 THEN sav%?o%=10 : o%+=1
+    ENDIF
+    inf%=NOT inf%
+  ELSE
+    IF inf% THEN
+      WHILE p%<l%
+        sav%?o%=disp%?p% : o%+=1 : p%+=1
+      ENDWHILE
+      sav%?o%=10 : o%+=1
+    ENDIF
+  ENDIF
+  p%=l%+1
+ENDWHILE
+IF o%>0 THEN
+  CASE lang$ OF
+    WHEN "basic","bbcbasic","bbc basic","bbc" : savetype%=&FD1 : savename$="Program"
+    WHEN "obey" : savetype%=&FEB : savename$="Obey"
+  ENDCASE
+ENDIF
+=o%
+
+REM Append s$ to sav% at offset o%; return the new offset.
+DEF FNsavestr(o%,s$)
+LOCAL i%
+FOR i%=1 TO LEN s$
+  IF o%<bufsize%-1 THEN sav%?o%=ASC MID$(s$,i%,1) : o%+=1
+NEXT
+=o%
+
+REM Display buffer bytes s% to e% (at most 255) as a string.
+DEF FNdispstr(s%,e%)
+LOCAL l$
+l$=""
+WHILE s%<e% AND LEN l$<255
+  l$+=CHR$(disp%?s%) : s%+=1
+ENDWHILE
+=l$
+
+REM s$ in lower case.
+DEF FNlower(s$)
+LOCAL i%,c%,l$
+l$=""
+FOR i%=1 TO LEN s$
+  c%=ASC MID$(s$,i%,1)
+  IF c%>=65 AND c%<=90 THEN c%+=32
+  l$+=CHR$c%
+NEXT
+=l$
+
+REM Start dragging the Save as icon.
+DEF PROCstartdrag
+LOCAL ox%,oy%
+ws%!0=savew% : SYS "Wimp_GetWindowState",,ws%
+ox%=ws%!4-ws%!20 : oy%=ws%!16-ws%!24
+blk2%!0=savew% : blk2%!4=0 : SYS "Wimp_GetIconState",,blk2%
+drag%!0=savew% : drag%!4=5
+drag%!8=ox%+blk2%!8 : drag%!12=oy%+blk2%!12 : drag%!16=ox%+blk2%!16 : drag%!20=oy%+blk2%!20
+drag%!24=&80000000 : drag%!28=&80000000 : drag%!32=&7FFFFFFF : drag%!36=&7FFFFFFF
+SYS "Wimp_DragBox",,drag%
+dragging%=TRUE
+ENDPROC
+
+REM The drag ended: offer the file to whatever is under the pointer.
+DEF PROCdragend
+LOCAL l$
+IF NOT dragging% THEN ENDPROC
+dragging%=FALSE
+SYS "Wimp_GetPointerInfo",,ptr%
+IF ptr%!12=savew% THEN ENDPROC
+l$=FNleaf(FNtrim(FNcstr(savenamebuf%)))
+IF l$="" THEN l$=savename$
+blk%!12=0 : blk%!16=1
+blk%!20=ptr%!12 : blk%!24=ptr%!16 : blk%!28=ptr%!0 : blk%!32=ptr%!4
+blk%!36=savelen% : blk%!40=savetype%
+$(blk%+44)=l$ : blk%?(44+LEN l$)=0
+blk%!0=(48+LEN l$) AND NOT 3
+SYS "Wimp_SendMessage",18,blk%,ptr%!12,ptr%!16
+saveout%=blk%!8
+ENDPROC
+
+REM The Filer replied with a pathname: save there and confirm.
+DEF PROCdatasaveack
+LOCAL f$
+IF saveout%=0 OR blk%!12<>saveout% THEN ENDPROC
+saveout%=0
+f$=FNcstr(blk%+44)
+PROCwritesave(f$)
+IF blk%!36<>-1 THEN $savenamebuf%=f$
+blk%!12=blk%!8 : blk%!16=3
+SYS "Wimp_SendMessage",18,blk%,blk%!4
+SYS "Wimp_CreateMenu",,-1
+ENDPROC
+
+REM Save button or Return: save to a full pathname, if one was typed.
+DEF PROCsavebutton
+LOCAL f$
+f$=FNtrim(FNcstr(savenamebuf%))
+IF INSTR(f$,".")=0 AND INSTR(f$,":")=0 THEN PROCwarn("To save, drag the icon to a directory display.") : ENDPROC
+PROCwritesave(f$)
+SYS "Wimp_CreateMenu",,-1
+ENDPROC
+
+REM Write sav% to file f$ with type savetype%.
+DEF PROCwritesave(f$)
+SYS "OS_File",10,f$,savetype%,,sav%,sav%+savelen%
 ENDPROC
 
 REM ---------------------------------------------------------------
@@ -1132,11 +1416,11 @@ avail%=lastw%-2*margin%
 nlines%=0 : p%=0
 WHILE p%<displen%
   c%=disp%?p% : p%+=1 : e%=p%
-  WHILE e%<displen% AND disp%?e%>3
+  WHILE e%<displen% AND disp%?e%>4
     e%+=1
   ENDWHILE
-  IF c%=3 THEN col%=3 ELSE col%=0
-  PROCaddline(-1,0,c%)
+  col%=0 : IF c%=3 OR c%=4 THEN col%=c%
+  IF c%<>4 THEN PROCaddline(-1,0,c%)
   PROCwrappara(p%,e%,col%)
   PROCaddline(-2,0,0)
   p%=e%
@@ -1250,6 +1534,7 @@ DEF FNcolour(s%,c%)
 LOCAL k%
 k%=0
 IF c%=3 THEN k%=&0000CC00
+IF c%=4 THEN k%=&77777700
 IF s%=-1 AND c%=1 THEN k%=&99442200
 IF s%=-1 AND c%=2 THEN k%=&3264C800
 =k%
@@ -1325,6 +1610,7 @@ ENDPROC
 REM Report an error; Cancel quits, OK carries on.
 DEF PROCerror
 LOCAL r%
+SYS "XHourglass_Smash"
 SYS "Wimp_ReportError",FNerr(REPORT$+" (line "+STR$ERL+")"),3,app$ TO ,r%
 IF r%=2 THEN quit%=TRUE
 ENDPROC
