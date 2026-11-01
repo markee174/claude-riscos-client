@@ -44,7 +44,8 @@ DIM attmtext% 64*keepmax%
 natt%=0 : firstpend%=0 : attused%=0 : saveref%=0 : saveleaf$="" : ?pathbuf%=0
 REM Selection in the conversation (display buffer offsets) and clipboard.
 sels%=0 : sele%=0 : selecting%=FALSE
-DIM clip% bufsize%, mb% 64
+DIM clip% bufsize%, mb% 64, urlmsg% 256
+urlref%=0 : url$=""
 cliplen%=0 : haveclip%=FALSE : saveclip%=FALSE
 DIM b64tab% 64, b64buf% 65536
 REM Saving: sav% holds the text being saved, built when a Save submenu opens.
@@ -297,6 +298,7 @@ CASE r% OF
   WHEN 8 : PROCkey
   WHEN 9 : PROCmenusel
   WHEN 17,18 : PROCmessage
+  WHEN 19 : IF blk%!16=&4AF80 AND blk%!8=urlref% THEN PROCurlbounced
 ENDCASE
 ENDPROC
 
@@ -1553,12 +1555,29 @@ blk2%!0=updw% : SYS "Wimp_CloseWindow",,blk2%
 ENDPROC
 
 REM Open the Releases page in the user's browser, then close the box.
+REM Ask a running browser to open it with the ANT URL protocol: the
+REM address goes in a recorded broadcast, and a browser that accepts it
+REM replies. If none does, the message bounces to PROCurlbounced.
 DEF PROCupdatedownload
-LOCAL u$,f%
-u$="https://github.com/"+updrepo$+"/releases/latest"
-SYS "XURI_Dispatch",0,u$,task% TO ;f%
-IF (f% AND 1)<>0 THEN PROCwarn("Could not open your web browser. Download the new version from "+u$)
+url$="https://github.com/"+updrepo$+"/releases/latest"
+urlmsg%!12=0 : urlmsg%!16=&4AF80
+$(urlmsg%+20)=url$ : urlmsg%?(20+LEN url$)=0
+urlmsg%!0=(24+LEN url$) AND NOT 3
+SYS "Wimp_SendMessage",18,urlmsg%,0
+urlref%=urlmsg%!8
 PROCupdatelater
+ENDPROC
+
+REM No browser took the address: put it on the clipboard and say so.
+DEF PROCurlbounced
+LOCAL i%
+urlref%=0
+FOR i%=1 TO LEN url$ : clip%?(i%-1)=ASC MID$(url$,i%,1) : NEXT
+cliplen%=LEN url$
+mb%!0=24 : mb%!12=0 : mb%!16=&F : mb%!20=4
+SYS "Wimp_SendMessage",17,mb%,0
+haveclip%=TRUE
+PROCwarn("No web browser is running. Start one, such as NetSurf, and paste the address, which is now on the clipboard: "+url$)
 ENDPROC
 
 REM Delete the update check's scrap files.
