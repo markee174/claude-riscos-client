@@ -8,7 +8,7 @@ REM OF ANY KIND, either express or implied.
 
 REM >!RunImage for !Claude
 REM A RISC OS desktop client for the Anthropic Messages API.
-REM 0.08 (1 Nov 2026).
+REM 0.09 (1 Nov 2026).
 REM Requests go through curl in a TaskWindow, so the desktop keeps
 REM multitasking while Claude replies.
 
@@ -29,20 +29,27 @@ REM ---------------------------------------------------------------
 
 REM Set constants, claim buffers, start the Wimp task and build the UI.
 DEF PROCinit
-app$="Claude" : version$="0.08 (1 Nov 2026)"
+app$="Claude" : version$="0.09 (1 Nov 2026)"
 toolh%=96 : lh%=40 : margin%=16 : maxl%=8000 : bufsize%=256*1024
 quit%=FALSE : busy%=FALSE : lastw%=0 : avail%=0 : started%=0
 DIM blk% 1024, blk2% 64, ws% 64, ext% 16, ptr% 32
 DIM inbuf% 1024, keybuf% 256, modelbuf% 64, certbuf% 256, titlebuf% 64
-REM Attachments: up to maxatt% files, held in attbuf% until sent.
-maxatt%=8 : attmax%=3*1024*1024
+REM Attachments: entries 0 to firstpend%-1 have been sent and are kept
+REM so they can be saved again; firstpend% to natt%-1 are waiting to be
+REM sent. Up to maxatt% can wait at once and keepmax% can be held.
+maxatt%=8 : keepmax%=32 : attmax%=3*1024*1024
 DIM attbuf% attmax%, pathbuf% 256, attlist% 256, tmpbuf% 256
-DIM attname$(maxatt%), attkind%(maxatt%), attmedia$(maxatt%), attoff%(maxatt%), attlen%(maxatt%)
-natt%=0 : attused%=0 : saveref%=0 : saveleaf$="" : ?pathbuf%=0
+DIM attname$(keepmax%), attkind%(keepmax%), attmedia$(keepmax%), attoff%(keepmax%), attlen%(keepmax%), attftype%(keepmax%)
+DIM attmtext% 64*keepmax%
+natt%=0 : firstpend%=0 : attused%=0 : saveref%=0 : saveleaf$="" : ?pathbuf%=0
+REM Selection in the conversation (display buffer offsets) and clipboard.
+sels%=0 : sele%=0 : selecting%=FALSE
+DIM clip% bufsize%, mb% 64
+cliplen%=0 : haveclip%=FALSE : saveclip%=FALSE
 DIM b64tab% 64, b64buf% 65536
 REM Saving: sav% holds the text being saved, built when a Save submenu opens.
 DIM sav% bufsize%, savenamebuf% 256, sprname% 16, drag% 40
-savelen%=0 : savetype%=&FFF : saveout%=0 : dragging%=FALSE
+savelen%=0 : savetype%=&FFF : saveout%=0 : dragging%=FALSE : savesrc%=sav%
 REM Update check: the GitHub repository whose latest release is checked.
 updrepo$="markee174/claude-riscos-client"
 checking%=FALSE : checkstart%=0 : newtag$=""
@@ -53,7 +60,7 @@ DIM ls%(maxl%), ll%(maxl%), lc%(maxl%)
 histlen%=0 : displen%=0 : resplen%=0 : nlines%=0 : recstart%=0 : prevhist%=0
 ?inbuf%=0 : $titlebuf%=app$
 PROCloadchoices
-DIM msgs% 24 : msgs%!0=1 : msgs%!4=2 : msgs%!8=3 : msgs%!12=&502 : msgs%!16=&400C0 : msgs%!20=0
+DIM msgs% 32 : msgs%!0=1 : msgs%!4=2 : msgs%!8=3 : msgs%!12=&F : msgs%!16=&10 : msgs%!20=&502 : msgs%!24=&400C0 : msgs%!28=0
 SYS "Wimp_Initialise",380,&4B534154,app$,msgs% TO ,task%
 PROCscratch
 PROCcreatewindows
@@ -129,7 +136,7 @@ PROCbutton(9,204,-244,364,-188,"Edit...","R5,3")
 PROCoption(10,204,-252,744,"Check for updates when Claude starts")
 SYS "Wimp_CreateWindow",,blk% TO choicesw%
 REM Conversation window: white work area, painted by PROCredraw.
-PROCwin(200,240,1000,900,&BF000002,0,0,-1000,2000,0,titlebuf%,64,3,0)
+PROCwin(200,240,1000,900,&BF000002,0,0,-1000,2000,0,titlebuf%,64,10,0)
 blk%!68=600+(400<<16)
 SYS "Wimp_CreateWindow",,blk% TO mainw%
 REM Toolbar pane: message field and default Send button.
@@ -221,12 +228,16 @@ ibmenu%=FNnewmenu(app$,3)
 PROCitem(ibmenu%,0,"Info",infow%,0)
 PROCitem(ibmenu%,1,"Choices...",-1,0)
 PROCitem(ibmenu%,2,"Quit",-1,&80)
-winmenu%=FNnewmenu(app$,5)
+attmenu%=FNnewmenu("Attachments",keepmax%)
+winmenu%=FNnewmenu(app$,8)
 PROCitem(winmenu%,0,"Save conversation",savew%,&08)
 PROCitem(winmenu%,1,"Save reply",savew%,&08)
-PROCitem(winmenu%,2,"Save code",savew%,&0A)
-PROCitem(winmenu%,3,"Clear",-1,0)
-PROCitem(winmenu%,4,"Choices...",-1,&80)
+PROCitem(winmenu%,2,"Save code",savew%,&08)
+PROCitem(winmenu%,3,"Save attachment",attmenu%,&02)
+PROCitem(winmenu%,4,"Copy",-1,0)
+PROCitem(winmenu%,5,"Select all",-1,&02)
+PROCitem(winmenu%,6,"Clear",-1,0)
+PROCitem(winmenu%,7,"Choices...",-1,&80)
 curmenu%=0 : menux%=0 : menuy%=0
 ENDPROC
 
@@ -269,19 +280,20 @@ REM Poll the Wimp once. While a request runs, ask for null events
 REM every half second so PROCcheckreply can look for the reply.
 DEF PROCpoll
 LOCAL r%,t%
-IF busy% OR checking% THEN
+IF busy% OR checking% OR selecting% THEN
   SYS "OS_ReadMonotonicTime" TO t%
-  SYS "Wimp_PollIdle",&1830,blk%,t%+50 TO r%
+  IF selecting% THEN t%+=4 ELSE t%+=50
+  SYS "Wimp_PollIdle",&1830,blk%,t% TO r%
 ELSE
   SYS "Wimp_Poll",&1831,blk% TO r%
 ENDIF
 CASE r% OF
-  WHEN 0 : PROCcheckreply : PROCcheckupdate
+  WHEN 0 : PROCcheckreply : PROCcheckupdate : IF selecting% THEN PROCseltrack
   WHEN 1 : IF blk%!0=mainw% THEN PROCredraw
   WHEN 2 : IF blk%!0=mainw% THEN PROCopenmain ELSE SYS "Wimp_OpenWindow",,blk%
   WHEN 3 : PROCclosereq
   WHEN 6 : PROCclick
-  WHEN 7 : PROCdragend
+  WHEN 7 : IF selecting% THEN PROCseltrack : selecting%=FALSE ELSE PROCdragend
   WHEN 8 : PROCkey
   WHEN 9 : PROCmenusel
   WHEN 17,18 : PROCmessage
@@ -336,6 +348,7 @@ CASE TRUE OF
   WHEN b%=2 AND w%=-2 : PROCshowmenu(ibmenu%,x%-64,96+44*3)
   WHEN b%=2 AND (w%=mainw% OR w%=panew%) : PROCshowmenu(winmenu%,x%-64,y%)
   WHEN w%=-2 : PROCshowmain
+  WHEN w%=mainw% : PROCmainclick(x%,y%,b%)
   WHEN w%=panew% AND i%=1 : PROCsend
   WHEN w%=choicesw% AND i%=7 : PROCsetchoices(b%)
   WHEN w%=choicesw% AND i%=6 : PROCcancelchoices(b%)
@@ -360,6 +373,7 @@ LOCAL w%,k%
 w%=blk%!0 : k%=blk%!24
 CASE TRUE OF
   WHEN w%=panew% AND k%=13 : PROCsend
+  WHEN k%=3 AND sels%<>sele% : PROCcopy
   WHEN w%=choicesw% AND k%=13 : PROCsetchoices(4)
   WHEN w%=choicesw% AND k%=27 : PROCcancelchoices(4)
   WHEN w%=attw% AND k%=13 : PROCaddpath
@@ -392,8 +406,10 @@ CASE curmenu% OF
     ENDCASE
   WHEN winmenu% :
     CASE s% OF
-      WHEN 3 : PROCclear
-      WHEN 4 : PROCopenchoices
+      WHEN 4 : PROCcopy
+      WHEN 5 : PROCsetsel(0,displen%)
+      WHEN 6 : PROCclear
+      WHEN 7 : PROCopenchoices
     ENDCASE
 ENDCASE
 IF (ptr%!8 AND 1) AND NOT quit% THEN SYS "Wimp_CreateMenu",,curmenu%,menux%,menuy%
@@ -406,6 +422,8 @@ CASE blk%!16 OF
   WHEN 1 : PROCdatasave
   WHEN 2 : PROCdatasaveack
   WHEN 3 : PROCdataload
+  WHEN &F : IF blk%!4<>task% AND (blk%!20 AND 4)<>0 THEN haveclip%=FALSE
+  WHEN &10 : PROCdatarequest
   WHEN &400C0 : PROCmenuwarn
   WHEN &502 : PROChelp
 ENDCASE
@@ -428,7 +446,7 @@ LOCAL h$
 h$=""
 CASE w% OF
   WHEN -2 : h$="This is the Claude icon.|MClick SELECT to open the conversation window.|MClick MENU for Info, Choices and Quit."
-  WHEN mainw% : h$="This window shows your conversation with Claude.|MDrag files here to attach them to your next message.|MClick MENU to save, clear or change your choices."
+  WHEN mainw% : h$="Your conversation with Claude.|MDrag with SELECT to select text; ADJUST extends it.|MDrop files here to attach them.|MClick MENU to copy, save or clear."
   WHEN savew% :
     CASE i% OF
       WHEN 0 : h$="Drag this icon to a directory display to save the file."
@@ -571,7 +589,7 @@ DEF PROCsend
 LOCAL n%,i%,c%
 IF busy% THEN ENDPROC
 n%=FNclen(inbuf%)
-IF n%=0 AND natt%=0 THEN ENDPROC
+IF n%=0 AND FNpending=0 THEN ENDPROC
 IF key$="" THEN PROCreport("Set your Anthropic API key in Choices first.") : PROCopenchoices : ENDPROC
 IF histlen%+FNmsgsize(n%)>=bufsize% THEN PROCwarn("This message and its attachments are too long for the conversation. Choose Clear from the menu, or attach less.") : ENDPROC
 prevhist%=histlen%
@@ -711,12 +729,13 @@ REM ---------------------------------------------------------------
 REM Load file f$ into attbuf% as attachment called n$, if it is a kind
 REM Claude can read. Warn and drop it otherwise.
 DEF PROCattach(f$,n$)
-LOCAL t%,len%,k%,a%
+LOCAL t%,len%,k%,a%,ft%
 IF busy% THEN PROCwarn("Wait for Claude's reply before attaching more files.") : ENDPROC
-SYS "XOS_File",17,f$ TO t%,,,,len%
+SYS "XOS_File",23,f$ TO t%,,,,len%,,ft%
 IF t%<>1 THEN PROCwarn("Only files can be attached, not directories or applications: "+n$) : ENDPROC
 IF len%=0 THEN PROCwarn(n$+" is empty.") : ENDPROC
-IF natt%>=maxatt% THEN PROCwarn("You can attach up to "+STR$maxatt%+" files to one message.") : ENDPROC
+IF natt%-firstpend%>=maxatt% THEN PROCwarn("You can attach up to "+STR$maxatt%+" files to one message.") : ENDPROC
+IF natt%>=keepmax% OR attused%+len%>attmax% THEN PROCdropsent
 IF attused%+len%>attmax% THEN PROCwarn(n$+" is too large. Attachments to one message can total "+STR$(attmax% DIV 1048576)+"MB.") : ENDPROC
 a%=attbuf%+attused%
 SYS "Hourglass_On"
@@ -724,7 +743,7 @@ SYS "OS_File",255,f$,a%,0
 k%=FNkind(a%,len%)
 SYS "Hourglass_Off"
 IF k%=0 THEN PROCwarn("Claude cannot read "+n$+". Attach text, JPEG, PNG, GIF, WebP or PDF files. Convert other images, such as Sprites, to JPEG or PNG first.") : ENDPROC
-attname$(natt%)=n$ : attkind%(natt%)=k% : attmedia$(natt%)=kmedia$
+attname$(natt%)=n$ : attkind%(natt%)=k% : attmedia$(natt%)=kmedia$ : attftype%(natt%)=ft%
 attoff%(natt%)=attused% : attlen%(natt%)=len%
 attused%=(attused%+len%+3) AND NOT 3
 natt%+=1
@@ -762,7 +781,7 @@ REM History bytes needed for the typed message (n% bytes) plus any
 REM text attachments once JSON-escaped, with room for notes.
 DEF FNmsgsize(n%)
 LOCAL i%,t%
-t%=FNesclen(inbuf%,n%)+1024 : i%=0
+t%=FNesclen(inbuf%,n%)+1024 : i%=firstpend%
 WHILE i%<natt%
   IF attkind%(i%)=1 THEN t%+=FNesclen(attbuf%+attoff%(i%),attlen%(i%))
   i%+=1
@@ -780,10 +799,10 @@ WHILE i%<n%
 ENDWHILE
 =t%
 
-REM Number of image and PDF attachments.
+REM Number of image and PDF attachments waiting to be sent.
 DEF FNbincount
 LOCAL i%,c%
-c%=0 : i%=0
+c%=0 : i%=firstpend%
 WHILE i%<natt%
   IF attkind%(i%)>1 THEN c%+=1
   i%+=1
@@ -794,7 +813,7 @@ REM Add each attachment to the history record being built and to the
 REM display: text files in full, images and PDFs as a note.
 DEF PROCattachtext
 LOCAL i%
-i%=0
+i%=firstpend%
 WHILE i%<natt%
   PROCdispbyte(10) : PROCdispstr("[Attached: "+attname$(i%)+"]")
   CASE attkind%(i%) OF
@@ -818,7 +837,7 @@ ENDPROC
 REM Write an image or document content block for each binary attachment.
 DEF PROCputbinaries(f%)
 LOCAL i%
-i%=0
+i%=firstpend%
 WHILE i%<natt%
   IF attkind%(i%)=2 THEN PROCput(f%,"{""type"":""image"",""source"":{""type"":""base64"",""media_type"":"""+attmedia$(i%)+""",""data"":""")
   IF attkind%(i%)=3 THEN PROCput(f%,"{""type"":""document"",""source"":{""type"":""base64"",""media_type"":"""+attmedia$(i%)+""",""data"":""")
@@ -845,18 +864,47 @@ ENDWHILE
 IF o%>0 THEN SYS "OS_GBPB",2,f%,b64buf%,o%
 ENDPROC
 
-REM Remove all attachments.
+REM Claude has replied: the waiting attachments become sent ones, kept
+REM so they can still be saved from the window menu.
 DEF PROCclearatt
-natt%=0 : attused%=0
+firstpend%=natt%
 PROCsetattlist
 ENDPROC
 
-REM Remove all attachments at the user's request, and say so.
+REM Remove the waiting attachments at the user's request, and say so.
 DEF PROCremoveatt
-IF natt%=0 THEN ENDPROC
-PROCclearatt
+IF natt%=firstpend% THEN ENDPROC
+attused%=attoff%(firstpend%) : natt%=firstpend%
+PROCsetattlist
 PROCnote("Removed all attached files.")
 ENDPROC
+
+REM Forget sent attachments to make room, moving any waiting ones down.
+DEF PROCdropsent
+LOCAL i%,j%,o%
+IF firstpend%=0 THEN ENDPROC
+IF natt%>firstpend% THEN
+  o%=attoff%(firstpend%)
+  SYS "Hourglass_On"
+  FOR i%=0 TO attused%-o%-4 STEP 4
+    attbuf%!i%=attbuf%!(o%+i%)
+  NEXT
+  SYS "Hourglass_Off"
+ELSE
+  o%=attused%
+ENDIF
+j%=0 : i%=firstpend%
+WHILE i%<natt%
+  attname$(j%)=attname$(i%) : attkind%(j%)=attkind%(i%) : attmedia$(j%)=attmedia$(i%)
+  attoff%(j%)=attoff%(i%)-o% : attlen%(j%)=attlen%(i%) : attftype%(j%)=attftype%(i%)
+  i%+=1 : j%+=1
+ENDWHILE
+attused%-=o% : natt%=j% : firstpend%=0
+ENDPROC
+
+REM Number of attachments waiting to be sent.
+DEF FNpending
+=natt%-firstpend%
 
 REM Add a grey note paragraph to the conversation and show it.
 DEF PROCnote(m$)
@@ -894,10 +942,10 @@ IF n%>=1048576 THEN s$=STR$(n% DIV 1048576)+"."+STR$((n% MOD 1048576)*10 DIV 104
 REM Update the Attachments window list and the conversation window title.
 DEF PROCsetattlist
 LOCAL s$,i%
-IF natt%=0 THEN s$="No files attached." ELSE s$=STR$natt%+" attached: "
-i%=0
+IF FNpending=0 THEN s$="No files attached." ELSE s$=STR$FNpending+" attached: "
+i%=firstpend%
 WHILE i%<natt%
-  IF i%>0 THEN s$+=", "
+  IF i%>firstpend% THEN s$+=", "
   IF LEN s$+LEN attname$(i%)<240 THEN s$+=attname$(i%) ELSE s$+="..." : i%=natt%
   i%+=1
 ENDWHILE
@@ -910,8 +958,8 @@ REM Title: waiting while busy, else the number of files attached.
 DEF PROCsettitle
 CASE TRUE OF
   WHEN busy% : $titlebuf%=app$+" (waiting for a reply)"
-  WHEN natt%=1 : $titlebuf%=app$+" (1 file attached)"
-  WHEN natt%>1 : $titlebuf%=app$+" ("+STR$natt%+" files attached)"
+  WHEN FNpending=1 : $titlebuf%=app$+" (1 file attached)"
+  WHEN FNpending>1 : $titlebuf%=app$+" ("+STR$FNpending+" files attached)"
   OTHERWISE $titlebuf%=app$
 ENDCASE
 SYS "Wimp_ForceRedraw",mainw%,&4B534154,3
@@ -986,18 +1034,47 @@ REM ---------------------------------------------------------------
 
 REM Shade Save menu items that would save nothing.
 DEF PROCshadesave
-LOCAL i%,a%
+LOCAL i%
 FOR i%=0 TO 2
-  a%=winmenu%+28+24*i%+8
-  IF FNbuildsave(i%+1)>0 THEN !a%=!a% AND NOT (1<<22) ELSE !a%=!a% OR (1<<22)
+  PROCshade(winmenu%,i%,FNbuildsave(i%+1)=0)
 NEXT
+PROCbuildattmenu
+PROCshade(winmenu%,3,natt%=0)
+PROCshade(winmenu%,4,sels%=sele%)
+PROCshade(winmenu%,5,displen%=0)
+ENDPROC
+
+REM Shade item i% of menu m% if on% is TRUE, else unshade it.
+DEF PROCshade(m%,i%,on%)
+LOCAL a%
+a%=m%+28+24*i%+8
+IF on% THEN !a%=!a% OR (1<<22) ELSE !a%=!a% AND NOT (1<<22)
+ENDPROC
+
+REM Fill the Save attachment submenu with one item per kept attachment.
+DEF PROCbuildattmenu
+LOCAL i%,a%,w%
+w%=LEN "Attachments"*16+16
+IF natt%=0 THEN ENDPROC
+FOR i%=0 TO natt%-1
+  a%=attmenu%+28+24*i%
+  $(attmtext%+64*i%)=LEFT$(attname$(i%),60)
+  IF i%=natt%-1 THEN a%!0=&88 ELSE a%!0=&08
+  a%!4=savew% : a%!8=&07000121 : a%!12=attmtext%+64*i% : a%!16=-1 : a%!20=64
+  IF LEN attname$(i%)*16+16>w% THEN w%=LEN attname$(i%)*16+16
+NEXT
+attmenu%!16=w%
 ENDPROC
 
 REM A Save item's submenu is about to open: fill the Save as box for it.
 DEF PROCmenuwarn
 LOCAL s$
 IF curmenu%<>winmenu% OR blk%!20<>savew% THEN ENDPROC
-savelen%=FNbuildsave(blk%!32+1)
+IF blk%!32=3 THEN
+  PROCattsave(blk%!36)
+ELSE
+  savelen%=FNbuildsave(blk%!32+1)
+ENDIF
 $savenamebuf%=savename$ : PROCredrawicon(savew%,1)
 s$=FNlower("file_"+RIGHT$("00"+STR$~savetype%,3))
 IF NOT FNspriteexists(s$) THEN s$="file_xxx"
@@ -1016,7 +1093,7 @@ REM 1 whole conversation, 2 last reply, 3 code blocks in the last reply.
 REM Sets savename$ and savetype% to suit.
 DEF FNbuildsave(k%)
 LOCAL o%,p%,c%,rs%,re%
-o%=0 : savetype%=&FFF
+o%=0 : savetype%=&FFF : savesrc%=sav%
 rs%=-1 : p%=0
 WHILE p%<displen%
   IF disp%?p%=2 THEN rs%=p%+1
@@ -1151,7 +1228,7 @@ blk%!36=savelen% : blk%!40=savetype%
 $(blk%+44)=l$ : blk%?(44+LEN l$)=0
 blk%!0=(48+LEN l$) AND NOT 3
 SYS "Wimp_SendMessage",18,blk%,ptr%!12,ptr%!16
-saveout%=blk%!8
+saveout%=blk%!8 : saveclip%=FALSE
 ENDPROC
 
 REM The Filer replied with a pathname: save there and confirm.
@@ -1160,11 +1237,16 @@ LOCAL f$
 IF saveout%=0 OR blk%!12<>saveout% THEN ENDPROC
 saveout%=0
 f$=FNcstr(blk%+44)
-PROCwritesave(f$)
-IF blk%!36<>-1 THEN $savenamebuf%=f$
+IF saveclip% THEN
+  SYS "OS_File",10,f$,&FFF,,clip%,clip%+cliplen%
+ELSE
+  PROCwritesave(f$)
+  IF blk%!36<>-1 THEN $savenamebuf%=f$
+ENDIF
 blk%!12=blk%!8 : blk%!16=3
 SYS "Wimp_SendMessage",18,blk%,blk%!4
-SYS "Wimp_CreateMenu",,-1
+IF NOT saveclip% THEN SYS "Wimp_CreateMenu",,-1
+saveclip%=FALSE
 ENDPROC
 
 REM Save button or Return: save to a full pathname, if one was typed.
@@ -1178,7 +1260,202 @@ ENDPROC
 
 REM Write sav% to file f$ with type savetype%.
 DEF PROCwritesave(f$)
-SYS "OS_File",10,f$,savetype%,,sav%,sav%+savelen%
+SYS "OS_File",10,f$,savetype%,,savesrc%,savesrc%+savelen%
+ENDPROC
+
+REM Set up the Save as box for kept attachment j%, with its own type.
+DEF PROCattsave(j%)
+savesrc%=attbuf%+attoff%(j%) : savelen%=attlen%(j%)
+savetype%=attftype%(j%) : savename$=attname$(j%)
+ENDPROC
+
+REM ---------------------------------------------------------------
+REM Selecting and copying text
+REM sels% is where a selection started and sele% where it ends; either
+REM may be the larger. Both are offsets into the display buffer.
+REM ---------------------------------------------------------------
+
+REM Mouse click in the conversation window's work area. With button
+REM type 10: drag 64/16, single click 1024/256, double click 4.
+DEF PROCmainclick(x%,y%,b%)
+LOCAL p%
+p%=FNposat(x%,y%)
+CASE b% OF
+  WHEN 64 : PROCsetsel(p%,p%) : PROCstartseldrag
+  WHEN 16 : PROCstartseldrag
+  WHEN 1024 : PROCsetsel(p%,p%)
+  WHEN 256 : PROCsetsel(sels%,p%)
+  WHEN 4 : PROCselpara(p%)
+ENDCASE
+ENDPROC
+
+REM Start an invisible drag that keeps the pointer in the window.
+DEF PROCstartseldrag
+ws%!0=mainw% : SYS "Wimp_GetWindowState",,ws%
+drag%!0=mainw% : drag%!4=7
+drag%!8=0 : drag%!12=0 : drag%!16=0 : drag%!20=0
+drag%!24=ws%!4 : drag%!28=ws%!8 : drag%!32=ws%!12 : drag%!36=ws%!16-toolh%
+SYS "Wimp_DragBox",,drag%
+selecting%=TRUE
+ENDPROC
+
+REM While dragging: move the selection end to the pointer, scrolling
+REM when the pointer reaches the top or bottom of the window.
+DEF PROCseltrack
+LOCAL p%
+SYS "Wimp_GetPointerInfo",,ptr%
+PROCautoscroll(ptr%!4)
+p%=FNposat(ptr%!0,ptr%!4)
+IF p%<>sele% THEN PROCsetsel(sels%,p%)
+ENDPROC
+
+REM Scroll one line if y% is near the top or bottom of the window.
+DEF PROCautoscroll(y%)
+LOCAL i%,d%
+ws%!0=mainw% : SYS "Wimp_GetWindowState",,ws%
+d%=0
+IF y%<ws%!8+lh% THEN d%=-lh%
+IF y%>ws%!16-toolh%-lh% AND ws%!24<0 THEN d%=lh%
+IF d%=0 THEN ENDPROC
+FOR i%=0 TO 28 STEP 4 : blk%!i%=ws%!i% : NEXT
+blk%!24+=d%
+IF blk%!24>0 THEN blk%!24=0
+PROCopenmain
+ENDPROC
+
+REM Select the paragraph containing offset p%.
+DEF PROCselpara(p%)
+LOCAL a%,e%
+a%=p% : e%=p%
+WHILE a%>0 AND disp%?(a%-1)>4
+  a%-=1
+ENDWHILE
+WHILE e%<displen% AND disp%?e%>4
+  e%+=1
+ENDWHILE
+PROCsetsel(a%,e%)
+ENDPROC
+
+REM Change the selection to a% to e%, redrawing the lines that change.
+DEF PROCsetsel(a%,e%)
+LOCAL lo%,hi%
+lo%=sels% : hi%=sels%
+IF sele%<lo% THEN lo%=sele%
+IF sele%>hi% THEN hi%=sele%
+IF a%<lo% THEN lo%=a%
+IF e%<lo% THEN lo%=e%
+IF a%>hi% THEN hi%=a%
+IF e%>hi% THEN hi%=e%
+sels%=a% : sele%=e%
+PROCredrawrange(lo%,hi%)
+ENDPROC
+
+REM Redraw the lines holding display offsets lo% to hi%.
+DEF PROCredrawrange(lo%,hi%)
+LOCAL a%,b%
+a%=FNoffline(lo%) : b%=FNoffline(hi%)
+IF a%<0 THEN a%=0
+IF b%<0 THEN b%=nlines%-1
+SYS "Wimp_ForceRedraw",mainw%,0,-(toolh%+8+(b%+1)*lh%),4000,-(toolh%+8+a%*lh%)
+ENDPROC
+
+REM Index of the text line holding offset o%, or -1.
+DEF FNoffline(o%)
+LOCAL i%,r%
+r%=-1 : i%=0
+WHILE r%<0 AND i%<nlines%
+  IF ls%(i%)>=0 AND o%>=ls%(i%) AND o%<=ls%(i%)+ll%(i%) THEN r%=i%
+  i%+=1
+ENDWHILE
+=r%
+
+REM Display offset nearest the screen point x%,y% in the window.
+DEF FNposat(x%,y%)
+LOCAL ox%,oy%,d%,i%,j%,o%,c%,k%,w0%,w1%,s$
+ws%!0=mainw% : SYS "Wimp_GetWindowState",,ws%
+ox%=ws%!4-ws%!20 : oy%=ws%!16-ws%!24
+d%=oy%-y%-toolh%-8
+IF d%<0 THEN i%=0 ELSE i%=d% DIV lh%
+o%=displen%
+IF i%<nlines% THEN
+  j%=i%
+  WHILE j%<nlines% AND ls%(j%)<0
+    j%+=1
+  ENDWHILE
+  IF j%<nlines% THEN
+    o%=ls%(j%)
+    IF j%=i% THEN
+      c%=x%-ox%-margin% : k%=0 : w0%=0 : s$=""
+      WHILE k%<ll%(i%) AND k%<255
+        s$+=CHR$(disp%?(ls%(i%)+k%)) : w1%=FNwidth(s$)
+        IF (w0%+w1%) DIV 2<=c% THEN k%+=1 : w0%=w1% ELSE k%=1000
+      ENDWHILE
+      IF k%=1000 THEN k%=LEN s$-1
+      o%=ls%(i%)+k%
+    ENDIF
+  ENDIF
+ENDIF
+=o%
+
+REM TRUE if the selection overlaps n% bytes at offset s%.
+DEF FNoverlap(s%,n%)
+LOCAL lo%,hi%
+lo%=sels% : hi%=sele%
+IF hi%<lo% THEN lo%=sele% : hi%=sels%
+=(lo%<hi% AND lo%<s%+n% AND hi%>s%)
+
+REM Paint text line a% (text s$ at x%,y%) with the selected part shown
+REM on a highlight.
+DEF PROCpaintsel(a%,s$,x%,y%)
+LOCAL lo%,hi%,b%,e%,w0%,w1%,t0$,t1$,t2$
+lo%=sels% : hi%=sele%
+IF hi%<lo% THEN lo%=sele% : hi%=sels%
+b%=lo%-ls%(a%) : e%=hi%-ls%(a%)
+IF b%<0 THEN b%=0
+IF e%>LEN s$ THEN e%=LEN s$
+t0$=LEFT$(s$,b%) : t1$=MID$(s$,b%+1,e%-b%) : t2$=MID$(s$,e%+1)
+w0%=FNwidth(t0$) : w1%=FNwidth(t0$+t1$)
+SYS "ColourTrans_SetGCOL",&FFDDBB00,,,0,0
+RECTANGLE FILL x%+w0%,y%-10,w1%-w0%,lh%
+SYS "Wimp_TextOp",0,FNcolour(ls%(a%),lc%(a%)),&FFFFFF00
+IF t0$<>"" THEN SYS "Wimp_TextOp",2,t0$,-1,-1,x%,y%
+IF t2$<>"" THEN SYS "Wimp_TextOp",2,t2$,-1,-1,x%+w1%,y%
+SYS "Wimp_TextOp",0,FNcolour(ls%(a%),lc%(a%)),&FFDDBB00
+SYS "Wimp_TextOp",2,t1$,-1,-1,x%+w0%,y%
+ENDPROC
+
+REM Copy the selection to the clipboard: build it as text in clip%,
+REM then tell other applications that Claude now owns the clipboard.
+DEF PROCcopy
+LOCAL lo%,hi%,c%
+lo%=sels% : hi%=sele%
+IF hi%<lo% THEN lo%=sele% : hi%=sels%
+IF lo%=hi% THEN ENDPROC
+cliplen%=0
+WHILE lo%<hi%
+  c%=disp%?lo%
+  IF c%<5 THEN
+    IF cliplen%>0 THEN clip%?cliplen%=10 : clip%?(cliplen%+1)=10 : cliplen%+=2
+  ELSE
+    clip%?cliplen%=c% : cliplen%+=1
+  ENDIF
+  lo%+=1
+ENDWHILE
+mb%!0=24 : mb%!12=0 : mb%!16=&F : mb%!20=4
+SYS "Wimp_SendMessage",17,mb%,0
+haveclip%=TRUE
+ENDPROC
+
+REM Another application wants to paste: offer it the clipboard as Text,
+REM using the same Message_DataSave protocol as a drag to save.
+DEF PROCdatarequest
+IF NOT haveclip% OR (blk%!36 AND 4)=0 THEN ENDPROC
+blk%!12=blk%!8 : blk%!16=1
+blk%!36=cliplen% : blk%!40=&FFF
+$(blk%+44)="Clipboard" : blk%?53=0
+blk%!0=56
+SYS "Wimp_SendMessage",18,blk%,blk%!4
+saveout%=blk%!8 : saveclip%=TRUE
 ENDPROC
 
 REM ---------------------------------------------------------------
@@ -1566,7 +1843,8 @@ ENDPROC
 REM Empty the conversation, unless a request is running.
 DEF PROCclear
 IF busy% THEN ENDPROC
-histlen%=0 : displen%=0
+histlen%=0 : displen%=0 : sels%=0 : sele%=0
+PROCdropsent
 PROCrefresh
 ENDPROC
 
@@ -1671,8 +1949,12 @@ WHILE more%
     ENDCASE
     IF s$<>"" THEN
       y%=oy%-toolh%-8-(a%+1)*lh%+10
-      SYS "Wimp_TextOp",0,FNcolour(ls%(a%),lc%(a%)),&FFFFFF00
-      SYS "Wimp_TextOp",2,s$,-1,-1,ox%+margin%,y%
+      IF ls%(a%)>=0 AND FNoverlap(ls%(a%),ll%(a%)) THEN
+        PROCpaintsel(a%,s$,ox%+margin%,y%)
+      ELSE
+        SYS "Wimp_TextOp",0,FNcolour(ls%(a%),lc%(a%)),&FFFFFF00
+        SYS "Wimp_TextOp",2,s$,-1,-1,ox%+margin%,y%
+      ENDIF
     ENDIF
     a%+=1
   ENDWHILE

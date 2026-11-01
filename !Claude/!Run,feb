@@ -2,5 +2,5 @@
 Set Claude$Dir <Obey$Dir>
 IconSprites <Claude$Dir>.!Sprites
 RMEnsure TaskWindow 0 Error Claude needs the TaskWindow module
-WimpSlot -min 5120K -max 5120K
+WimpSlot -min 5632K -max 5632K
 Run <Claude$Dir>.!RunImage

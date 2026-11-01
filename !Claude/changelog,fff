@@ -2,6 +2,17 @@
 
 All notable changes to !Claude. Version numbers match `!Help` and the Info box.
 
+## 0.09 (1 Nov 2026)
+
+### Added
+- Selecting text in the conversation window. Drag with SELECT to select, click ADJUST to extend the selection, double-click to select a paragraph, or choose **Select all** from the window menu. The selection is highlighted, and the window scrolls when you drag to its top or bottom edge.
+- **Copy** in the window menu, and Ctrl-C when the key reaches !Claude, puts the selection on the RISC OS clipboard. Other applications can paste it as Text.
+- **Save attachment** in the window menu lists every file attached in this conversation. Each opens the Save as box, saving the file with its original name and file type.
+
+### Changed
+- Attachments are kept after they are sent, so they can be saved again. Up to 32 are kept; when space runs out, the oldest sent ones are forgotten. Clear also forgets them.
+- WimpSlot raised from 5120K to 5632K to hold the clipboard.
+
 ## 0.08 (1 Nov 2026)
 
 ### Added

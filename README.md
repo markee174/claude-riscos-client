@@ -33,7 +33,8 @@ It is deliberately simple:
 
 - **SELECT** on the icon bar icon opens the conversation window.
 - **MENU** on the icon bar icon: Info, Choices, Quit.
-- **MENU** over the window: Save conversation, Save reply, Save code, Clear, Choices.
+- **MENU** over the window: Save conversation, Save reply, Save code, Save attachment, Copy, Select all, Clear, Choices.
+- **Selecting text:** drag with SELECT over the conversation, click ADJUST to extend, double-click for a paragraph. **Copy** puts it on the clipboard.
 - **Saving:** each Save item opens a Save as box; drag its icon to a Filer window. **Save code** saves the code blocks from Claude's last reply, with BBC BASIC saved as BASIC text ready to run.
 - Interactive Help works on every window.
 - **Attaching files:** drag files onto the conversation window or the icon bar icon, or click **Attach...**. Text files are sent in full; JPEG, PNG, GIF, WebP and PDF files are sent as images and documents. Up to 8 files and 3MB per message.

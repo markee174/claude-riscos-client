@@ -1,4 +1,4 @@
-Claude 0.08 (1 Nov 2026)
+Claude 0.09 (1 Nov 2026)
 =========================
 
 A desktop client for Claude, using the Anthropic Messages API.
@@ -14,7 +14,7 @@ Use
   Click SELECT on the icon bar icon to open the conversation.
   Type in the field at the top and press Return or click Send.
   MENU over the window: Save conversation, Save reply,
-  Save code, Clear, Choices.
+  Save code, Save attachment, Copy, Select all, Clear, Choices.
   MENU over the icon bar icon: Info, Choices, Quit.
 
 Choices
@@ -41,12 +41,21 @@ Attaching files
   The hourglass shows while files load, and a grey note in the
   conversation confirms each file attached.
 
+Selecting and copying
+  Drag with SELECT over the conversation to select text. Click
+  ADJUST to extend the selection, double-click to select a whole
+  paragraph, or choose Select all from the menu. Choose Copy from
+  the menu (or press Ctrl-C) to put the text on the clipboard,
+  then paste it into any application that supports the clipboard.
+
 Saving
   MENU over the window: Save conversation, Save reply and Save
   code each open a Save as box. Drag its icon to a Filer window,
   or type a full pathname and click Save. Save code saves the
   code blocks from Claude's last reply; BBC BASIC code is saved
   as BASIC text, ready to run.
+  Save attachment lists the files you have attached in this
+  conversation; save any of them again with their original type.
 
 CLAUDE.md
   Instructions sent to Claude with every message, for example
