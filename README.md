@@ -53,7 +53,7 @@ Choices are saved in `<Choices$Write>.Claude.Choices`. **Your API key is stored 
 
 - BASIC is stored as text (`!RunImage,fd1`), so changes show up as readable diffs.
 - File types are carried as `,xxx` filename suffixes (`,feb` Obey, `,fd1` BASIC text, `,ff9` Sprite, `,fff` Text).
-- Development happens on a Linux, Mac or Windows machine with git, and the files are copied to RISC OS for testing.
+- Development happens on a Linux, Mac or RISC OS machine with git, and the files are copied to RISC OS for testing.
 
 ## Contributing
 
@@ -64,6 +64,3 @@ Issues and pull requests are welcome. Please test changes on real RISC OS before
 Copyright 2026 Mark Stephens.
 
 Licensed under the Apache License, Version 2.0. See `LICENSE`.
-```
-
-The copyright line matches the header I suggested for `!RunImage`. If you'd rather the copyright sat with IDRsolutions, change it in both places.
