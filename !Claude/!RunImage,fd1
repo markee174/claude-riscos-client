@@ -101,7 +101,7 @@ SYS "OS_File",8,"<Wimp$ScrapDir>.Claude",,,0
 scrap$=FNcanon("<Wimp$ScrapDir>.Claude")
 req$=scrap$+".Request" : cfg$=scrap$+".Config" : obey$=scrap$+".Fetch"
 out$=scrap$+".Reply" : err$=scrap$+".Errors" : done$=scrap$+".Done"
-urifile$=scrap$+".Releases" : updcfg$=scrap$+".UpdConfig" : updobey$=scrap$+".UpdFetch" : updout$=scrap$+".UpdReply" : upddone$=scrap$+".UpdDone"
+updcfg$=scrap$+".UpdConfig" : updobey$=scrap$+".UpdFetch" : updout$=scrap$+".UpdReply" : upddone$=scrap$+".UpdDone"
 ENDPROC
 
 REM Return the canonical form of path p$.
@@ -164,13 +164,13 @@ PROCfield(1,16,-104,504,savenamebuf%,256,"Pptr_write;Kta")
 PROCbutton(2,160,-228,320,-172,"Cancel","R5,3")
 PROCbutton(3,336,-236,504,-164,"Save","R6,3")
 SYS "Wimp_CreateWindow",,blk% TO savew%
-REM Update available box: message, tick box, Later and Download.
+REM Update available box: message, tick box, Later and Copy address.
 PROCwin(320,480,1080,772,&84000012,1,0,-292,760,0,FNstr("Update available"),17,0,5)
 PROCicon(0,16,-68,744,-20,&17000111,updmsg%,-1,128)
 PROCicon(1,16,-116,744,-68,&17000111,FNstr("Download it from the Releases page on GitHub."),-1,47)
 PROCoption(2,16,-132,744,"Don't show this message for this update again")
-PROCbutton(3,388,-268,548,-212,"Later","R5,3")
-PROCbutton(4,564,-276,744,-204,"Download","R6,3")
+PROCbutton(3,348,-268,508,-212,"Later","R5,3")
+PROCbutton(4,524,-276,744,-204,"Copy address","R6,3")
 SYS "Wimp_CreateWindow",,blk% TO updw%
 ENDPROC
 
@@ -477,7 +477,7 @@ CASE w% OF
     CASE i% OF
       WHEN 2 : h$="Tick this to stop Claude telling you about this update. You will still hear about later ones."
       WHEN 3 : h$="Click SELECT to close this window and carry on with the version you have."
-      WHEN 4 : h$="Click SELECT to open the Releases page on GitHub in your web browser."
+      WHEN 4 : h$="Click SELECT to put the address of the Releases page on the clipboard, ready to paste into your web browser."
       OTHERWISE h$="A newer version of Claude is available on GitHub."
     ENDCASE
   WHEN attw% :
@@ -1554,23 +1554,14 @@ blk2%!0=updw% : SYS "Wimp_CloseWindow",,blk2%
 ENDPROC
 
 REM Open the Releases page in the user's browser, then close the box.
-REM Open the Releases page: write the address to a URI file (type
-REM &F91) and Filer_Run it, as double-clicking one would. The Filer
-REM does this in its own time, so nothing here waits for the browser,
-REM and the browser is started if it is not already running. The
-REM address also goes on the clipboard, and a note in the conversation
-REM says what happened, in case no browser takes it.
+REM Put the Releases page address on the clipboard, close the box and
+REM say so. Opening a browser automatically proved unreliable, so the
+REM user pastes the address instead.
 DEF PROCupdatedownload
-LOCAL f%
 url$="https://github.com/"+updrepo$+"/releases/latest"
-f%=OPENOUT urifile$
-PROCput(f%,url$)
-CLOSE#f%
-SYS "OS_File",18,urifile$,&F91
-SYS "XOS_CLI","Filer_Run "+urifile$
 PROCurlclip
 PROCupdatelater
-PROCnote("Opening the Releases page in your web browser. If it does not open, paste the address, which is on the clipboard: "+url$)
+PROCwarn("The Releases page address is on the clipboard. Paste it into your web browser to download the new version: "+url$)
 ENDPROC
 
 REM Put url$ on the clipboard.
@@ -1585,7 +1576,6 @@ ENDPROC
 
 REM Delete the update check's scrap files.
 DEF PROCdelupdate
-SYS "XOS_File",6,urifile$
 SYS "XOS_File",6,updcfg$ : SYS "XOS_File",6,updobey$
 SYS "XOS_File",6,updout$ : SYS "XOS_File",6,upddone$
 ENDPROC

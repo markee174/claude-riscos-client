@@ -23,8 +23,8 @@ Choices
 
 Updates
   When Claude starts it checks GitHub for a newer release. If
-  there is one, a window offers to open the Releases page in your
-  browser. Tick "Don't show this message for this update again" to
+  there is one, a window offers to put the Releases page address
+  on the clipboard, ready to paste into your browser. Tick "Don't show this message for this update again" to
   skip that release; you still hear about later ones. Untick
   "Check for updates when Claude starts" in Choices to turn the
   check off. The check needs curl and an internet connection, and

@@ -41,7 +41,7 @@ It is deliberately simple:
 
 **CLAUDE.md** holds instructions sent to Claude with every message, such as "Reply in plain British English". Click **Edit...** in Choices to open it in your text editor; save it there and the change applies to your next message. It is stored as `<Choices$Write>.Claude.CLAUDE/md`.
 
-**Updates:** when !Claude starts, it checks GitHub for a newer release and offers to open the Releases page. You can skip a particular release, or turn the check off in Choices.
+**Updates:** when !Claude starts, it checks GitHub for a newer release and offers to copy the Releases page address to the clipboard. You can skip a particular release, or turn the check off in Choices.
 
 Choices are saved in `<Choices$Write>.Claude.Choices`. **Your API key is stored there in plain text.** The temporary curl config holding the key is deleted after each request.
 

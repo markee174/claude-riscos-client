@@ -14,12 +14,12 @@ All notable changes to !Claude. Version numbers match `!Help` and the Info box.
 - WimpSlot raised from 5120K to 5632K to hold the clipboard.
 
 ### Fixed
-- Clicking **Download** in the Update available window hung the computer. !Claude now opens the Releases page the way double-clicking a URI file does, which also starts your browser if it is not running. The address is put on the clipboard too, and a note in the conversation says so, in case no browser takes it.
+- Clicking **Download** in the Update available window hung the computer. The button is now **Copy address**: it puts the Releases page address on the clipboard and tells you to paste it into your web browser.
 
 ## 0.08 (1 Nov 2026)
 
 ### Added
-- Update check. When !Claude starts, it asks GitHub for the latest release in the background. If that release is newer, an **Update available** window offers **Download**, which opens the Releases page in your web browser, or **Later**.
+- Update check. When !Claude starts, it asks GitHub for the latest release in the background. If that release is newer, an **Update available** window offers **Copy address**, which puts the Releases page address on the clipboard, or **Later**.
 - A **Don't show this message for this update again** tick box in that window. Ticked, !Claude stays quiet about that release but still reports later ones.
 - **Check for updates when Claude starts** option in Choices, on by default.
 - The check never interrupts: if curl is missing, the network is down or GitHub does not answer within a minute, nothing is shown.
