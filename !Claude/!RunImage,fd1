@@ -8,7 +8,7 @@ REM OF ANY KIND, either express or implied.
 
 REM >!RunImage for !Claude
 REM A RISC OS desktop client for the Anthropic Messages API.
-REM 0.06 (1 Nov 2026).
+REM 0.07 (1 Nov 2026).
 REM Requests go through curl in a TaskWindow, so the desktop keeps
 REM multitasking while Claude replies.
 
@@ -29,22 +29,30 @@ REM ---------------------------------------------------------------
 
 REM Set constants, claim buffers, start the Wimp task and build the UI.
 DEF PROCinit
-app$="Claude" : version$="0.06 (1 Nov 2026)"
+app$="Claude" : version$="0.07 (1 Nov 2026)"
 toolh%=96 : lh%=40 : margin%=16 : maxl%=8000 : bufsize%=256*1024
 quit%=FALSE : busy%=FALSE : lastw%=0 : avail%=0 : started%=0
 DIM blk% 1024, blk2% 64, ws% 64, ext% 16, ptr% 32
 DIM inbuf% 1024, keybuf% 256, modelbuf% 64, certbuf% 256, titlebuf% 64
+REM Attachments: up to maxatt% files, held in attbuf% until sent.
+maxatt%=8 : attmax%=3*1024*1024
+DIM attbuf% attmax%, pathbuf% 256, attlist% 256, tmpbuf% 256
+DIM attname$(maxatt%), attkind%(maxatt%), attmedia$(maxatt%), attoff%(maxatt%), attlen%(maxatt%)
+natt%=0 : attused%=0 : saveref%=0 : saveleaf$="" : ?pathbuf%=0
+DIM b64tab% 64, b64buf% 65536
+$b64tab%="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
 DIM hist% bufsize%, disp% bufsize%, resp% bufsize%
 DIM ls%(maxl%), ll%(maxl%), lc%(maxl%)
 histlen%=0 : displen%=0 : resplen%=0 : nlines%=0 : recstart%=0 : prevhist%=0
 ?inbuf%=0 : $titlebuf%=app$
 PROCloadchoices
-DIM msgs% 8 : msgs%!0=&502 : msgs%!4=0
+DIM msgs% 16 : msgs%!0=1 : msgs%!4=3 : msgs%!8=&502 : msgs%!12=0
 SYS "Wimp_Initialise",380,&4B534154,app$,msgs% TO ,task%
 PROCscratch
 PROCcreatewindows
 PROCcreatemenus
 PROCiconbar
+PROCsetattlist
 PROCstartupchecks
 ENDPROC
 
@@ -115,10 +123,21 @@ PROCwin(200,240,1000,900,&BF000002,0,0,-1000,2000,0,titlebuf%,64,3,0)
 blk%!68=600+(400<<16)
 SYS "Wimp_CreateWindow",,blk% TO mainw%
 REM Toolbar pane: message field and default Send button.
-PROCwin(0,0,800,toolh%,&80000030,1,0,-toolh%,2000,0,0,0,3,2)
-PROCfield(0,16,-22,624,inbuf%,1024,"Pptr_write")
+PROCwin(0,0,800,toolh%,&80000030,1,0,-toolh%,2000,0,0,0,3,3)
+PROCfield(0,16,-22,456,inbuf%,1024,"Pptr_write")
 PROCbutton(1,640,-84,784,-12,"Send","R6,3")
+PROCbutton(2,464,-78,624,-22,"Attach...","R5,3")
 SYS "Wimp_CreateWindow",,blk% TO panew%
+REM Attachments window: list, pathname field with Add, Remove all, OK.
+PROCwin(320,420,1080,728,&87000012,1,0,-308,760,0,FNstr("Attachments"),12,0,7)
+PROCicon(0,16,-72,744,-20,&17000135,attlist%,FNstr("R2"),256)
+PROClabel(1,-88,"Pathname")
+PROCfield(2,204,-88,608,pathbuf%,256,"Pptr_write;Kta")
+PROCbutton(3,624,-144,744,-88,"Add","R5,3")
+PROCicon(4,16,-208,744,-156,&17000111,FNstr("Drag files here or onto the conversation window."),-1,50)
+PROCbutton(5,340,-284,540,-228,"Remove all","R5,3")
+PROCbutton(6,556,-292,744,-220,"OK","R6,3")
+SYS "Wimp_CreateWindow",,blk% TO attw%
 ENDPROC
 
 REM Fill blk% with a window definition. tptr% is an indirected title
@@ -253,8 +272,9 @@ ENDPROC
 
 REM Stretch the message field and move Send to suit width w%.
 DEF PROCresizepane(w%)
-SYS "Wimp_ResizeIcon",panew%,0,16,-74,w%-176,-22
+SYS "Wimp_ResizeIcon",panew%,0,16,-74,w%-344,-22
 SYS "Wimp_ResizeIcon",panew%,1,w%-160,-84,w%-16,-12
+SYS "Wimp_ResizeIcon",panew%,2,w%-336,-78,w%-176,-22
 SYS "Wimp_ForceRedraw",panew%,0,-toolh%,2000,0
 ENDPROC
 
@@ -284,6 +304,10 @@ CASE TRUE OF
   WHEN w%=choicesw% AND i%=7 : PROCsetchoices(b%)
   WHEN w%=choicesw% AND i%=6 : PROCcancelchoices(b%)
   WHEN w%=choicesw% AND i%=9 : PROCeditinstructions
+  WHEN w%=panew% AND i%=2 : PROCopenatt
+  WHEN w%=attw% AND i%=3 : PROCaddpath
+  WHEN w%=attw% AND i%=5 : PROCclearatt
+  WHEN w%=attw% AND i%=6 : IF b%<>1 THEN blk2%!0=attw% : SYS "Wimp_CloseWindow",,blk2%
 ENDCASE
 ENDPROC
 
@@ -295,6 +319,8 @@ CASE TRUE OF
   WHEN w%=panew% AND k%=13 : PROCsend
   WHEN w%=choicesw% AND k%=13 : PROCsetchoices(4)
   WHEN w%=choicesw% AND k%=27 : PROCcancelchoices(4)
+  WHEN w%=attw% AND k%=13 : PROCaddpath
+  WHEN w%=attw% AND k%=27 : blk2%!0=attw% : SYS "Wimp_CloseWindow",,blk2%
   OTHERWISE SYS "Wimp_ProcessKey",k%
 ENDCASE
 ENDPROC
@@ -329,6 +355,8 @@ REM Handle Message_Quit and Message_HelpRequest.
 DEF PROCmessage
 CASE blk%!16 OF
   WHEN 0 : quit%=TRUE
+  WHEN 1 : PROCdatasave
+  WHEN 3 : PROCdataload
   WHEN &502 : PROChelp
 ENDCASE
 ENDPROC
@@ -350,10 +378,11 @@ LOCAL h$
 h$=""
 CASE w% OF
   WHEN -2 : h$="This is the Claude icon.|MClick SELECT to open the conversation window.|MClick MENU for Info, Choices and Quit."
-  WHEN mainw% : h$="This window shows your conversation with Claude.|MClick MENU to clear it or change your choices."
+  WHEN mainw% : h$="This window shows your conversation with Claude.|MDrag files here to attach them to your next message.|MClick MENU to clear it or change your choices."
   WHEN panew% :
     CASE i% OF
-      WHEN 1 : h$="Click SELECT to send your message to Claude."
+      WHEN 1 : h$="Click SELECT to send your message to Claude, with any attached files."
+      WHEN 2 : h$="Click SELECT to open the Attachments window.|MYou can also drag files onto the conversation window."
       OTHERWISE h$="Type a message to Claude, then press Return to send it."
     ENDCASE
   WHEN choicesw% :
@@ -367,6 +396,15 @@ CASE w% OF
       OTHERWISE h$="Set your API key and model here."
     ENDCASE
   WHEN infow% : h$="This window shows information about Claude."
+  WHEN attw% :
+    CASE i% OF
+      WHEN 0 : h$="These files will be sent with your next message."
+      WHEN 1,2 : h$="Type the full pathname of a file, then press Return or click Add."
+      WHEN 3 : h$="Click SELECT to attach the file named in the Pathname field."
+      WHEN 5 : h$="Click SELECT to remove all attached files."
+      WHEN 6 : h$="Click SELECT to close this window. Attached files stay attached."
+      OTHERWISE h$="Drag text, JPEG, PNG, GIF, WebP or PDF files here to send them with your next message."
+    ENDCASE
 ENDCASE
 =h$
 
@@ -444,8 +482,9 @@ DEF PROCsend
 LOCAL n%,i%,c%
 IF busy% THEN ENDPROC
 n%=FNclen(inbuf%)
-IF n%=0 THEN ENDPROC
+IF n%=0 AND natt%=0 THEN ENDPROC
 IF key$="" THEN PROCreport("Set your Anthropic API key in Choices first.") : PROCopenchoices : ENDPROC
+IF histlen%+FNmsgsize(n%)>=bufsize% THEN PROCwarn("This message and its attachments are too long for the conversation. Choose Clear from the menu, or attach less.") : ENDPROC
 prevhist%=histlen%
 PROCdispbyte(1)
 i%=0
@@ -454,7 +493,7 @@ WHILE i%<n%
   IF c%>=32 THEN PROCdispbyte(c%)
   i%+=1
 ENDWHILE
-PROChistbegin(1) : PROChistesc(inbuf%,n%) : PROChistend
+PROChistbegin(1) : PROChistesc(inbuf%,n%) : PROCattachtext : PROChistend
 PROCdelscratch
 PROCwritereq : PROCwritecfg : PROCwriteobey
 SYS "Wimp_StartTask","TaskWindow ""Obey "+obey$+""" -name ""Claude request"" -wimpslot 8192K -quit"
@@ -477,9 +516,17 @@ p%=0
 WHILE p%<histlen%
   IF p%>0 THEN PROCput(f%,",")
   n%=hist%!(p%+4)
-  IF hist%?p%=1 THEN PROCput(f%,"{""role"":""user"",""content"":""") ELSE PROCput(f%,"{""role"":""assistant"",""content"":""")
-  IF n%>0 THEN SYS "OS_GBPB",2,f%,hist%+p%+8,n%
-  PROCput(f%,"""}")
+  IF p%=prevhist% AND FNbincount>0 THEN
+    PROCput(f%,"{""role"":""user"",""content"":[")
+    PROCputbinaries(f%)
+    PROCput(f%,"{""type"":""text"",""text"":""")
+    IF n%>0 THEN SYS "OS_GBPB",2,f%,hist%+p%+8,n%
+    PROCput(f%,"""}]}")
+  ELSE
+    IF hist%?p%=1 THEN PROCput(f%,"{""role"":""user"",""content"":""") ELSE PROCput(f%,"{""role"":""assistant"",""content"":""")
+    IF n%>0 THEN SYS "OS_GBPB",2,f%,hist%+p%+8,n%
+    PROCput(f%,"""}")
+  ENDIF
   p%=(p%+8+n%+3) AND NOT 3
 ENDWHILE
 PROCput(f%,"]}")
@@ -556,11 +603,239 @@ ENDPROC
 
 REM Shade Send and retitle the window while a request runs.
 DEF PROCbusyui
-IF busy% THEN $titlebuf%=app$+" (waiting for a reply)" ELSE $titlebuf%=app$
+PROCsettitle
 blk2%!0=panew% : blk2%!4=1 : blk2%!12=1<<22
 IF busy% THEN blk2%!8=1<<22 ELSE blk2%!8=0
 SYS "Wimp_SetIconState",,blk2%
 SYS "Wimp_ForceRedraw",mainw%,&4B534154,3
+ENDPROC
+
+REM ---------------------------------------------------------------
+REM Attachments
+REM Kinds: 1 text (inlined into the message), 2 image, 3 PDF (sent as
+REM base64 blocks with the next message only; history keeps a note).
+REM ---------------------------------------------------------------
+
+REM Load file f$ into attbuf% as attachment called n$, if it is a kind
+REM Claude can read. Warn and drop it otherwise.
+DEF PROCattach(f$,n$)
+LOCAL t%,len%,k%,a%
+IF busy% THEN PROCwarn("Wait for Claude's reply before attaching more files.") : ENDPROC
+SYS "XOS_File",17,f$ TO t%,,,,len%
+IF t%<>1 THEN PROCwarn("Only files can be attached, not directories or applications: "+n$) : ENDPROC
+IF len%=0 THEN PROCwarn(n$+" is empty.") : ENDPROC
+IF natt%>=maxatt% THEN PROCwarn("You can attach up to "+STR$maxatt%+" files to one message.") : ENDPROC
+IF attused%+len%>attmax% THEN PROCwarn(n$+" is too large. Attachments to one message can total "+STR$(attmax% DIV 1048576)+"MB.") : ENDPROC
+a%=attbuf%+attused%
+SYS "OS_File",255,f$,a%,0
+k%=FNkind(a%,len%)
+IF k%=0 THEN PROCwarn("Claude cannot read "+n$+". Attach text, JPEG, PNG, GIF, WebP or PDF files. Convert other images, such as Sprites, to JPEG or PNG first.") : ENDPROC
+attname$(natt%)=n$ : attkind%(natt%)=k% : attmedia$(natt%)=kmedia$
+attoff%(natt%)=attused% : attlen%(natt%)=len%
+attused%=(attused%+len%+3) AND NOT 3
+natt%+=1
+PROCsetattlist
+ENDPROC
+
+REM Return the kind of the n% bytes at a% (0 if unsupported), setting
+REM kmedia$ to the media type for images and PDFs.
+DEF FNkind(a%,n%)
+LOCAL k%,i%,c%
+k%=0 : kmedia$=""
+IF n%>=4 THEN
+  CASE TRUE OF
+    WHEN a%?0=&FF AND a%?1=&D8 AND a%?2=&FF : k%=2 : kmedia$="image/jpeg"
+    WHEN a%?0=&89 AND a%?1=&50 AND a%?2=&4E AND a%?3=&47 : k%=2 : kmedia$="image/png"
+    WHEN a%?0=&47 AND a%?1=&49 AND a%?2=&46 AND a%?3=&38 : k%=2 : kmedia$="image/gif"
+    WHEN a%?0=&25 AND a%?1=&50 AND a%?2=&44 AND a%?3=&46 : k%=3 : kmedia$="application/pdf"
+  ENDCASE
+ENDIF
+IF k%=0 AND n%>=12 THEN
+  IF a%?0=&52 AND a%?1=&49 AND a%?2=&46 AND a%?3=&46 AND a%?8=&57 AND a%?9=&45 AND a%?10=&42 AND a%?11=&50 THEN k%=2 : kmedia$="image/webp"
+ENDIF
+IF k%=0 THEN
+  k%=1 : i%=0
+  WHILE k%=1 AND i%<n%
+    c%=a%?i%
+    IF c%<32 AND c%<>9 AND c%<>10 AND c%<>13 THEN k%=0
+    i%+=1
+  ENDWHILE
+ENDIF
+=k%
+
+REM History bytes needed for the typed message (n% bytes) plus any
+REM text attachments once JSON-escaped, with room for notes.
+DEF FNmsgsize(n%)
+LOCAL i%,t%
+t%=FNesclen(inbuf%,n%)+1024 : i%=0
+WHILE i%<natt%
+  IF attkind%(i%)=1 THEN t%+=FNesclen(attbuf%+attoff%(i%),attlen%(i%))
+  i%+=1
+ENDWHILE
+=t%
+
+REM Length of n% bytes at a% after PROChistesc escaping.
+DEF FNesclen(a%,n%)
+LOCAL i%,c%,t%
+t%=0 : i%=0
+WHILE i%<n%
+  c%=a%?i%
+  IF c%=34 OR c%=92 THEN t%+=2 ELSE IF c%<32 OR c%>=128 THEN t%+=6 ELSE t%+=1
+  i%+=1
+ENDWHILE
+=t%
+
+REM Number of image and PDF attachments.
+DEF FNbincount
+LOCAL i%,c%
+c%=0 : i%=0
+WHILE i%<natt%
+  IF attkind%(i%)>1 THEN c%+=1
+  i%+=1
+ENDWHILE
+=c%
+
+REM Add each attachment to the history record being built and to the
+REM display: text files in full, images and PDFs as a note.
+DEF PROCattachtext
+LOCAL i%
+i%=0
+WHILE i%<natt%
+  PROCdispbyte(10) : PROCdispstr("[Attached: "+attname$(i%)+"]")
+  CASE attkind%(i%) OF
+    WHEN 1 :
+      PROChiststr(CHR$10+CHR$10+"File: "+attname$(i%)+CHR$10)
+      PROChistesc(attbuf%+attoff%(i%),attlen%(i%))
+    WHEN 2 : PROChiststr(CHR$10+"[Attached image: "+attname$(i%)+"]")
+    WHEN 3 : PROChiststr(CHR$10+"[Attached PDF: "+attname$(i%)+"]")
+  ENDCASE
+  i%+=1
+ENDWHILE
+ENDPROC
+
+REM JSON-escape s$ into the history record being built.
+DEF PROChiststr(s$)
+IF s$="" THEN ENDPROC
+$tmpbuf%=s$
+PROChistesc(tmpbuf%,LEN s$)
+ENDPROC
+
+REM Write an image or document content block for each binary attachment.
+DEF PROCputbinaries(f%)
+LOCAL i%
+i%=0
+WHILE i%<natt%
+  IF attkind%(i%)=2 THEN PROCput(f%,"{""type"":""image"",""source"":{""type"":""base64"",""media_type"":"""+attmedia$(i%)+""",""data"":""")
+  IF attkind%(i%)=3 THEN PROCput(f%,"{""type"":""document"",""source"":{""type"":""base64"",""media_type"":"""+attmedia$(i%)+""",""data"":""")
+  IF attkind%(i%)>1 THEN PROCputb64(f%,attbuf%+attoff%(i%),attlen%(i%)) : PROCput(f%,"""}},")
+  i%+=1
+ENDWHILE
+ENDPROC
+
+REM Write n% bytes from a% to file f% as base64, 64K at a time.
+DEF PROCputb64(f%,a%,n%)
+LOCAL i%,o%,v%
+i%=0 : o%=0
+WHILE i%<n%
+  v%=(a%?i%)<<16
+  IF i%+1<n% THEN v%+=(a%?(i%+1))<<8
+  IF i%+2<n% THEN v%+=a%?(i%+2)
+  b64buf%?o%=b64tab%?((v%>>>18) AND 63)
+  b64buf%?(o%+1)=b64tab%?((v%>>>12) AND 63)
+  IF i%+1<n% THEN b64buf%?(o%+2)=b64tab%?((v%>>>6) AND 63) ELSE b64buf%?(o%+2)=61
+  IF i%+2<n% THEN b64buf%?(o%+3)=b64tab%?(v% AND 63) ELSE b64buf%?(o%+3)=61
+  o%+=4 : i%+=3
+  IF o%>=65532 THEN SYS "OS_GBPB",2,f%,b64buf%,o% : o%=0
+ENDWHILE
+IF o%>0 THEN SYS "OS_GBPB",2,f%,b64buf%,o%
+ENDPROC
+
+REM Remove all attachments.
+DEF PROCclearatt
+natt%=0 : attused%=0
+PROCsetattlist
+ENDPROC
+
+REM Update the Attachments window list and the conversation window title.
+DEF PROCsetattlist
+LOCAL s$,i%
+IF natt%=0 THEN s$="No files attached." ELSE s$=STR$natt%+" attached: "
+i%=0
+WHILE i%<natt%
+  IF i%>0 THEN s$+=", "
+  IF LEN s$+LEN attname$(i%)<240 THEN s$+=attname$(i%) ELSE s$+="..." : i%=natt%
+  i%+=1
+ENDWHILE
+$attlist%=s$
+PROCredrawicon(attw%,0)
+PROCsettitle
+ENDPROC
+
+REM Title: waiting while busy, else the number of files attached.
+DEF PROCsettitle
+CASE TRUE OF
+  WHEN busy% : $titlebuf%=app$+" (waiting for a reply)"
+  WHEN natt%=1 : $titlebuf%=app$+" (1 file attached)"
+  WHEN natt%>1 : $titlebuf%=app$+" ("+STR$natt%+" files attached)"
+  OTHERWISE $titlebuf%=app$
+ENDCASE
+SYS "Wimp_ForceRedraw",mainw%,&4B534154,3
+ENDPROC
+
+REM Open the Attachments window at the front, caret in the pathname field.
+DEF PROCopenatt
+blk%!0=attw% : SYS "Wimp_GetWindowState",,blk%
+blk%!28=-1 : SYS "Wimp_OpenWindow",,blk%
+SYS "Wimp_SetCaretPosition",attw%,2,0,0,-1,FNclen(pathbuf%)
+ENDPROC
+
+REM Attach the file typed in the pathname field.
+DEF PROCaddpath
+LOCAL f$
+f$=FNtrim(FNcstr(pathbuf%))
+IF f$="" THEN ENDPROC
+PROCattach(f$,FNleaf(f$))
+?pathbuf%=0 : PROCredrawicon(attw%,2)
+SYS "Wimp_SetCaretPosition",attw%,2,0,0,-1,0
+ENDPROC
+
+REM Leaf name of pathname p$.
+DEF FNleaf(p$)
+LOCAL i%
+i%=LEN p$
+WHILE i%>0 AND MID$(p$,i%,1)<>"." AND MID$(p$,i%,1)<>":"
+  i%-=1
+ENDWHILE
+=MID$(p$,i%+1)
+
+REM TRUE if window w% accepts dropped files.
+DEF FNdroptarget(w%)
+=(w%=mainw% OR w%=panew% OR w%=attw% OR w%=-2)
+
+REM Another application wants to save data to us: ask for it in
+REM <Wimp$Scrap> and remember the leaf name it offered.
+DEF PROCdatasave
+IF NOT FNdroptarget(blk%!20) THEN ENDPROC
+saveleaf$=FNcstr(blk%+44)
+blk%!12=blk%!8 : blk%!16=2 : blk%!36=-1
+$(blk%+44)="<Wimp$Scrap>" : blk%?(44+12)=0
+blk%!0=60
+SYS "Wimp_SendMessage",17,blk%,blk%!4
+saveref%=blk%!8
+ENDPROC
+
+REM A file was dropped on one of our windows, or saved via <Wimp$Scrap>.
+DEF PROCdataload
+LOCAL f$,n$,t%,scrap%
+IF NOT FNdroptarget(blk%!20) THEN ENDPROC
+f$=FNcstr(blk%+44) : t%=blk%!40
+scrap%=(saveref%<>0 AND blk%!12=saveref%)
+IF scrap% THEN n$=saveleaf$ ELSE n$=FNleaf(f$)
+saveref%=0
+blk%!12=blk%!8 : blk%!16=4
+SYS "Wimp_SendMessage",17,blk%,blk%!4
+IF t%=&1000 OR t%=&2000 THEN PROCwarn("Only files can be attached, not directories or applications: "+n$) ELSE PROCattach(f$,n$)
+IF scrap% THEN SYS "XOS_File",6,"<Wimp$Scrap>"
 ENDPROC
 
 REM ---------------------------------------------------------------
@@ -623,6 +898,7 @@ REPEAT
 UNTIL p%<0
 IF NOT got% THEN PROCfail("Unexpected reply: "+FNpreview) : ENDPROC
 PROChistend
+PROCclearatt
 p%=FNfindkey("stop_reason",0)
 IF p%>=0 THEN IF FNmatch(p%,"max_tokens") THEN PROCdispbyte(3) : PROCdispstr("The reply reached the 4096-token limit and stopped early.")
 ENDPROC

@@ -2,6 +2,17 @@
 
 All notable changes to !Claude. Version numbers match `!Help` and the Info box.
 
+## 0.07 (1 Nov 2026)
+
+### Added
+- File attachments. Drag files onto the conversation window or the icon bar icon, or click **Attach...** in the toolbar to open the Attachments window, where you can drag files or type a pathname. Files from other applications arrive through `<Wimp$Scrap>`.
+- Text files are sent in full as part of your message. JPEG, PNG, GIF, WebP and PDF files are sent as image and document blocks with the next message; the conversation history keeps a note of them, so later messages do not resend them.
+- The window title shows how many files are attached. Attachments are cleared once Claude replies, and kept if the request fails so you can send again.
+- Up to 8 files and 3MB per message. !Claude checks file contents, not file types, and warns about anything Claude cannot read.
+
+### Changed
+- WimpSlot raised from 1024K to 5120K to hold attachments.
+
 ## 0.06 (1 Nov 2026)
 
 ### Added

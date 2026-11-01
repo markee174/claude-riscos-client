@@ -10,7 +10,7 @@ A vibe-coded RISC OS desktop client for Claude, written in BBC BASIC.
 
 It is deliberately simple:
 
-- Text only: no images, attachments or streaming.
+- No streaming: replies appear when they are complete.
 - Markdown appears as typed (`**bold**`, `# headings`).
 - Characters outside Latin-1 show as `?`.
 - The conversation lives in memory and is lost when you quit.
@@ -35,6 +35,7 @@ It is deliberately simple:
 - **MENU** on the icon bar icon: Info, Choices, Quit.
 - **MENU** over the window: Clear, Choices.
 - Interactive Help works on every window.
+- **Attaching files:** drag files onto the conversation window or the icon bar icon, or click **Attach...**. Text files are sent in full; JPEG, PNG, GIF, WebP and PDF files are sent as images and documents. Up to 8 files and 3MB per message.
 
 **CLAUDE.md** holds instructions sent to Claude with every message, such as "Reply in plain British English". Click **Edit...** in Choices to open it in your text editor; save it there and the change applies to your next message. It is stored as `<Choices$Write>.Claude.CLAUDE/md`.
 

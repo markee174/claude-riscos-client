@@ -1,4 +1,4 @@
-Claude 0.06 (1 Nov 2026)
+Claude 0.07 (1 Nov 2026)
 =========================
 
 A desktop client for Claude, using the Anthropic Messages API.
@@ -19,6 +19,15 @@ Use
 Choices
   Saved to <Choices$Write>.Claude.Choices in plain text,
   API key included.
+
+Attaching files
+  Drag files onto the conversation window or the icon bar icon,
+  or click Attach... and drag them into the Attachments window or
+  type a pathname. They are sent with your next message.
+  Text files are included in full. JPEG, PNG, GIF, WebP and PDF
+  files are sent as images and documents; later messages only
+  carry a note that they were attached. Up to 8 files, 3MB in all.
+  Convert Sprites and other images to JPEG or PNG first.
 
 CLAUDE.md
   Instructions sent to Claude with every message, for example
