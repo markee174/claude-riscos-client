@@ -44,8 +44,8 @@ DIM attmtext% 64*keepmax%
 natt%=0 : firstpend%=0 : attused%=0 : saveref%=0 : saveleaf$="" : ?pathbuf%=0
 REM Selection in the conversation (display buffer offsets) and clipboard.
 sels%=0 : sele%=0 : selecting%=FALSE
-DIM clip% bufsize%, mb% 64, urlmsg% 256
-urlref%=0 : url$=""
+DIM clip% bufsize%, mb% 64
+url$=""
 cliplen%=0 : haveclip%=FALSE : saveclip%=FALSE
 DIM b64tab% 64, b64buf% 65536
 REM Saving: sav% holds the text being saved, built when a Save submenu opens.
@@ -101,7 +101,7 @@ SYS "OS_File",8,"<Wimp$ScrapDir>.Claude",,,0
 scrap$=FNcanon("<Wimp$ScrapDir>.Claude")
 req$=scrap$+".Request" : cfg$=scrap$+".Config" : obey$=scrap$+".Fetch"
 out$=scrap$+".Reply" : err$=scrap$+".Errors" : done$=scrap$+".Done"
-updcfg$=scrap$+".UpdConfig" : updobey$=scrap$+".UpdFetch" : updout$=scrap$+".UpdReply" : upddone$=scrap$+".UpdDone"
+urifile$=scrap$+".Releases" : updcfg$=scrap$+".UpdConfig" : updobey$=scrap$+".UpdFetch" : updout$=scrap$+".UpdReply" : upddone$=scrap$+".UpdDone"
 ENDPROC
 
 REM Return the canonical form of path p$.
@@ -298,7 +298,6 @@ CASE r% OF
   WHEN 8 : PROCkey
   WHEN 9 : PROCmenusel
   WHEN 17,18 : PROCmessage
-  WHEN 19 : IF blk%!16=&4AF80 AND blk%!8=urlref% THEN PROCurlbounced
 ENDCASE
 ENDPROC
 
@@ -1555,33 +1554,38 @@ blk2%!0=updw% : SYS "Wimp_CloseWindow",,blk2%
 ENDPROC
 
 REM Open the Releases page in the user's browser, then close the box.
-REM Ask a running browser to open it with the ANT URL protocol: the
-REM address goes in a recorded broadcast, and a browser that accepts it
-REM replies. If none does, the message bounces to PROCurlbounced.
+REM Open the Releases page: write the address to a URI file (type
+REM &F91) and Filer_Run it, as double-clicking one would. The Filer
+REM does this in its own time, so nothing here waits for the browser,
+REM and the browser is started if it is not already running. The
+REM address also goes on the clipboard, and a note in the conversation
+REM says what happened, in case no browser takes it.
 DEF PROCupdatedownload
+LOCAL f%
 url$="https://github.com/"+updrepo$+"/releases/latest"
-urlmsg%!12=0 : urlmsg%!16=&4AF80
-$(urlmsg%+20)=url$ : urlmsg%?(20+LEN url$)=0
-urlmsg%!0=(24+LEN url$) AND NOT 3
-SYS "Wimp_SendMessage",18,urlmsg%,0
-urlref%=urlmsg%!8
+f%=OPENOUT urifile$
+PROCput(f%,url$)
+CLOSE#f%
+SYS "OS_File",18,urifile$,&F91
+SYS "XOS_CLI","Filer_Run "+urifile$
+PROCurlclip
 PROCupdatelater
+PROCnote("Opening the Releases page in your web browser. If it does not open, paste the address, which is on the clipboard: "+url$)
 ENDPROC
 
-REM No browser took the address: put it on the clipboard and say so.
-DEF PROCurlbounced
+REM Put url$ on the clipboard.
+DEF PROCurlclip
 LOCAL i%
-urlref%=0
 FOR i%=1 TO LEN url$ : clip%?(i%-1)=ASC MID$(url$,i%,1) : NEXT
 cliplen%=LEN url$
 mb%!0=24 : mb%!12=0 : mb%!16=&F : mb%!20=4
 SYS "Wimp_SendMessage",17,mb%,0
 haveclip%=TRUE
-PROCwarn("No web browser is running. Start one, such as NetSurf, and paste the address, which is now on the clipboard: "+url$)
 ENDPROC
 
 REM Delete the update check's scrap files.
 DEF PROCdelupdate
+SYS "XOS_File",6,urifile$
 SYS "XOS_File",6,updcfg$ : SYS "XOS_File",6,updobey$
 SYS "XOS_File",6,updout$ : SYS "XOS_File",6,upddone$
 ENDPROC

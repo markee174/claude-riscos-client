@@ -14,7 +14,7 @@ All notable changes to !Claude. Version numbers match `!Help` and the Info box.
 - WimpSlot raised from 5120K to 5632K to hold the clipboard.
 
 ### Fixed
-- Clicking **Download** in the Update available window hung the computer. !Claude now asks a running web browser to open the Releases page using the standard ANT URL message. If no browser is running, the address is put on the clipboard and a message tells you to start a browser and paste it.
+- Clicking **Download** in the Update available window hung the computer. !Claude now opens the Releases page the way double-clicking a URI file does, which also starts your browser if it is not running. The address is put on the clipboard too, and a note in the conversation says so, in case no browser takes it.
 
 ## 0.08 (1 Nov 2026)
 
