@@ -1,4 +1,4 @@
-Claude 0.07 (1 Nov 2026)
+Claude 0.08 (1 Nov 2026)
 =========================
 
 A desktop client for Claude, using the Anthropic Messages API.
@@ -20,6 +20,15 @@ Use
 Choices
   Saved to <Choices$Write>.Claude.Choices in plain text,
   API key included.
+
+Updates
+  When Claude starts it checks GitHub for a newer release. If
+  there is one, a window offers to open the Releases page in your
+  browser. Tick "Don't show this message for this update again" to
+  skip that release; you still hear about later ones. Untick
+  "Check for updates when Claude starts" in Choices to turn the
+  check off. The check needs curl and an internet connection, and
+  says nothing if either is missing.
 
 Attaching files
   Drag files onto the conversation window or the icon bar icon,

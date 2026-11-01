@@ -2,6 +2,14 @@
 
 All notable changes to !Claude. Version numbers match `!Help` and the Info box.
 
+## 0.08 (1 Nov 2026)
+
+### Added
+- Update check. When !Claude starts, it asks GitHub for the latest release in the background. If that release is newer, an **Update available** window offers **Download**, which opens the Releases page in your web browser, or **Later**.
+- A **Don't show this message for this update again** tick box in that window. Ticked, !Claude stays quiet about that release but still reports later ones.
+- **Check for updates when Claude starts** option in Choices, on by default.
+- The check never interrupts: if curl is missing, the network is down or GitHub does not answer within a minute, nothing is shown.
+
 ## 0.07 (1 Nov 2026)
 
 ### Added
