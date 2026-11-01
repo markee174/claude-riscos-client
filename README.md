@@ -53,7 +53,7 @@ Choices are saved in `<Choices$Write>.Claude.Choices`. **Your API key is stored 
 
 - BASIC is stored as text (`!RunImage,fd1`), so changes show up as readable diffs.
 - File types are carried as `,xxx` filename suffixes (`,feb` Obey, `,fd1` BASIC text, `,ff9` Sprite, `,fff` Text).
-- Development happens on a Linux, Mac or RISC OS machine with git, and the files are copied to RISC OS for testing.
+- Development happens on a Linux, Mac or RISC OS machine with git, and tested on RISC OS 5 machines.
 
 ## Contributing
 
