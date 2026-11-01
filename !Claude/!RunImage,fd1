@@ -8,7 +8,7 @@ REM OF ANY KIND, either express or implied.
 
 REM >!RunImage for !Claude
 REM A RISC OS desktop client for the Anthropic Messages API.
-REM  0.04 (26 Oct 2026).
+REM 0.05 (1 Nov 2026).
 REM Requests go through curl in a TaskWindow, so the desktop keeps
 REM multitasking while Claude replies.
 
@@ -29,7 +29,7 @@ REM ---------------------------------------------------------------
 
 REM Set constants, claim buffers, start the Wimp task and build the UI.
 DEF PROCinit
-app$="Claude" : version$="0.04 (26 Oct 2026)"
+app$="Claude" : version$="0.05 (1 Nov 2026)"
 toolh%=96 : lh%=40 : margin%=16 : maxl%=8000 : bufsize%=256*1024
 quit%=FALSE : busy%=FALSE : lastw%=0 : avail%=0 : started%=0
 DIM blk% 1024, blk2% 64, ws% 64, ext% 16, ptr% 32
@@ -45,7 +45,27 @@ PROCscratch
 PROCcreatewindows
 PROCcreatemenus
 PROCiconbar
+PROCstartupchecks
 ENDPROC
+
+REM Warn if the API key is missing or curl cannot be found. Each check
+REM shows its own dialogue; the app carries on running either way.
+DEF PROCstartupchecks
+IF key$="" THEN PROCwarn("No API key is set. Choose Choices from the Claude icon bar menu and paste in your Anthropic API key.")
+IF NOT FNcurlfound THEN PROCwarn("curl was not found, so Claude cannot send messages. Install curl with PackMan (add the riscos.info source first), or set Alias$curl to point to it.")
+ENDPROC
+
+REM TRUE if curl is set up as an alias or is a file on Run$Path.
+DEF FNcurlfound
+LOCAL t%,found%
+found%=FALSE
+SYS "XOS_ReadVarVal","Alias$curl",blk%,-1,0,0 TO ,,t%
+IF t%<>0 THEN found%=TRUE
+IF NOT found% THEN
+  SYS "XOS_File",15,"curl",,,"Run$Path" TO t%
+  IF t%=1 OR t%=3 THEN found%=TRUE
+ENDIF
+=found%
 
 REM Create the scrap directory and work out canonical names for the
 REM files shared with curl.
@@ -969,6 +989,11 @@ DEF FNerr(m$)
 m$=LEFT$(m$,250)
 !errblk%=0 : $(errblk%+4)=m$ : errblk%?(4+LEN m$)=0
 =errblk%
+
+REM Show warning m$ with an OK button and no "Error from" prefix.
+DEF PROCwarn(m$)
+SYS "Wimp_ReportError",FNerr(m$),1+16,app$
+ENDPROC
 
 DEF PROCreport(m$)
 SYS "Wimp_ReportError",FNerr(m$),1,app$

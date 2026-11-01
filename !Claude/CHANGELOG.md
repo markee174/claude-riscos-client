@@ -2,6 +2,11 @@
 
 All notable changes to !Claude. Version numbers match `!Help` and the Info box.
 
+## 0.05 (1 Nov 2026)
+
+### Added
+- Start-up checks. If no API key is set, or curl cannot be found as an `Alias$curl` alias or a file on `Run$Path`, !Claude shows a warning dialogue explaining what to do. It still loads, so you can open Choices and set the key.
+
 ## 0.04 (26 Oct 2026)
 
 ### Fixed
