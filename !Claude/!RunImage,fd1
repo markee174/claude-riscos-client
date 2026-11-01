@@ -8,7 +8,7 @@ REM OF ANY KIND, either express or implied.
 
 REM >!RunImage for !Claude
 REM A RISC OS desktop client for the Anthropic Messages API.
-REM Draft 0.04 (26 Oct 2026). Not yet tested on RISC OS hardware.
+REM  0.04 (26 Oct 2026).
 REM Requests go through curl in a TaskWindow, so the desktop keeps
 REM multitasking while Claude replies.
 
