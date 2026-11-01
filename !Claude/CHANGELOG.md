@@ -2,6 +2,12 @@
 
 All notable changes to !Claude. Version numbers match `!Help` and the Info box.
 
+## 0.06 (1 Nov 2026)
+
+### Added
+- CLAUDE.md: instructions sent to Claude as the system prompt with every message. Stored as `<Choices$Write>.Claude.CLAUDE/md`, so it appears as `CLAUDE.md` when copied to other systems.
+- **Edit...** button in Choices. It opens CLAUDE.md in your text editor, creating it first with starter instructions if it does not exist. Changes apply to the next message; there is no need to restart !Claude.
+
 ## 0.05 (1 Nov 2026)
 
 ### Added

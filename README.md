@@ -36,6 +36,8 @@ It is deliberately simple:
 - **MENU** over the window: Clear, Choices.
 - Interactive Help works on every window.
 
+**CLAUDE.md** holds instructions sent to Claude with every message, such as "Reply in plain British English". Click **Edit...** in Choices to open it in your text editor; save it there and the change applies to your next message. It is stored as `<Choices$Write>.Claude.CLAUDE/md`.
+
 Choices are saved in `<Choices$Write>.Claude.Choices`. **Your API key is stored there in plain text.** The temporary curl config holding the key is deleted after each request.
 
 ## Troubleshooting

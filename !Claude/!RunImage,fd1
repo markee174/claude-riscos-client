@@ -8,7 +8,7 @@ REM OF ANY KIND, either express or implied.
 
 REM >!RunImage for !Claude
 REM A RISC OS desktop client for the Anthropic Messages API.
-REM 0.05 (1 Nov 2026).
+REM 0.06 (1 Nov 2026).
 REM Requests go through curl in a TaskWindow, so the desktop keeps
 REM multitasking while Claude replies.
 
@@ -29,7 +29,7 @@ REM ---------------------------------------------------------------
 
 REM Set constants, claim buffers, start the Wimp task and build the UI.
 DEF PROCinit
-app$="Claude" : version$="0.05 (1 Nov 2026)"
+app$="Claude" : version$="0.06 (1 Nov 2026)"
 toolh%=96 : lh%=40 : margin%=16 : maxl%=8000 : bufsize%=256*1024
 quit%=FALSE : busy%=FALSE : lastw%=0 : avail%=0 : started%=0
 DIM blk% 1024, blk2% 64, ws% 64, ext% 16, ptr% 32
@@ -98,15 +98,17 @@ PROCinforow(4,-132,"Author","Mark Stephens")
 PROCinforow(6,-188,"Version",version$)
 SYS "Wimp_CreateWindow",,blk% TO infow%
 REM Choices window: three writable fields, Cancel and Set.
-PROCwin(300,400,1060,672,&87000012,1,0,-272,760,0,FNstr("Claude choices"),15,0,8)
+PROCwin(300,400,1060,736,&87000012,1,0,-336,760,0,FNstr("Claude choices"),15,0,10)
 PROClabel(0,-20,"API key")
 PROCfield(1,204,-20,744,keybuf%,256,"Pptr_write;Kta;D*")
 PROClabel(2,-76,"Model")
 PROCfield(3,204,-76,744,modelbuf%,64,"Pptr_write;Kta")
 PROClabel(4,-132,"CA file")
 PROCfield(5,204,-132,744,certbuf%,256,"Pptr_write;Kta")
-PROCbutton(6,404,-244,564,-188,"Cancel","R5,3")
-PROCbutton(7,580,-252,748,-180,"Set","R6,3")
+PROCbutton(6,404,-308,564,-252,"Cancel","R5,3")
+PROCbutton(7,580,-316,748,-244,"Set","R6,3")
+PROClabel(8,-188,"CLAUDE.md")
+PROCbutton(9,204,-244,364,-188,"Edit...","R5,3")
 SYS "Wimp_CreateWindow",,blk% TO choicesw%
 REM Conversation window: white work area, painted by PROCredraw.
 PROCwin(200,240,1000,900,&BF000002,0,0,-1000,2000,0,titlebuf%,64,3,0)
@@ -281,6 +283,7 @@ CASE TRUE OF
   WHEN w%=panew% AND i%=1 : PROCsend
   WHEN w%=choicesw% AND i%=7 : PROCsetchoices(b%)
   WHEN w%=choicesw% AND i%=6 : PROCcancelchoices(b%)
+  WHEN w%=choicesw% AND i%=9 : PROCeditinstructions
 ENDCASE
 ENDPROC
 
@@ -360,6 +363,7 @@ CASE w% OF
       WHEN 5 : h$="Optional: the full pathname of a CA certificate file for curl. Leave it empty unless curl reports a certificate error."
       WHEN 6 : h$="Click SELECT to close this window without saving.|MClick ADJUST to restore the saved values."
       WHEN 7 : h$="Click SELECT to save these choices and close this window.|MClick ADJUST to save them and keep it open."
+      WHEN 8,9 : h$="Click SELECT to edit CLAUDE.md, the instructions sent to Claude with every message. Save it in your editor; the change applies to your next message."
       OTHERWISE h$="Set your API key and model here."
     ENDCASE
   WHEN infow% : h$="This window shows information about Claude."
@@ -465,7 +469,10 @@ REM Write the JSON request body: model, token limit, whole history.
 DEF PROCwritereq
 LOCAL f%,p%,n%
 f%=OPENOUT req$
-PROCput(f%,"{""model"":"""+model$+""",""max_tokens"":4096,""messages"":[")
+PROCput(f%,"{""model"":"""+model$+""",""max_tokens"":4096,")
+n%=FNloadinstructions
+IF n%>0 THEN PROCput(f%,"""system"":""") : PROCputesc(f%,resp%,n%) : PROCput(f%,""",")
+PROCput(f%,"""messages"":[")
 p%=0
 WHILE p%<histlen%
   IF p%>0 THEN PROCput(f%,",")
@@ -477,6 +484,46 @@ WHILE p%<histlen%
 ENDWHILE
 PROCput(f%,"]}")
 CLOSE#f%
+ENDPROC
+
+REM Load CLAUDE.md into resp% and return its length, or 0 if there is
+REM none. resp% is free at this point: the last reply is already parsed.
+DEF FNloadinstructions
+LOCAL n%
+n%=FNlen("Choices:Claude.CLAUDE/md")
+IF n%<=0 OR n%>=bufsize% THEN n%=0 ELSE SYS "OS_File",255,"Choices:Claude.CLAUDE/md",resp%,0
+=n%
+
+REM Write n% Latin-1 bytes from a% to file f% as JSON string content.
+DEF PROCputesc(f%,a%,n%)
+LOCAL i%,c%
+i%=0
+WHILE i%<n%
+  c%=a%?i%
+  CASE TRUE OF
+    WHEN c%=34 OR c%=92 : BPUT#f%,92 : BPUT#f%,c%
+    WHEN c%<32 OR c%>=128 : PROCput(f%,"\u"+RIGHT$("000"+STR$~c%,4))
+    OTHERWISE BPUT#f%,c%
+  ENDCASE
+  i%+=1
+ENDWHILE
+ENDPROC
+
+REM Open CLAUDE.md in the user's text editor, creating it first with
+REM starter instructions if it does not exist in <Choices$Write>.
+DEF PROCeditinstructions
+LOCAL f$,f%
+SYS "OS_File",8,"<Choices$Write>.Claude",,,0
+f$=FNcanon("<Choices$Write>.Claude")+".CLAUDE/md"
+IF FNlen(f$)<0 THEN
+  f%=OPENOUT f$
+  PROCline(f%,"You are chatting through !Claude, a desktop client on RISC OS.")
+  PROCline(f%,"Replies appear as plain text in the desktop font, which shows Latin-1 characters only.")
+  PROCline(f%,"Avoid Markdown formatting, tables and emoji.")
+  CLOSE#f%
+  SYS "OS_File",18,f$,&FFF
+ENDIF
+OSCLI "Filer_Run "+f$
 ENDPROC
 
 REM Write the curl config file. The API key lives here rather than on

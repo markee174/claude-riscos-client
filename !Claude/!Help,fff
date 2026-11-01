@@ -1,4 +1,4 @@
-Claude 0.05 (1 Nov 2026)
+Claude 0.06 (1 Nov 2026)
 =========================
 
 A desktop client for Claude, using the Anthropic Messages API.
@@ -19,6 +19,14 @@ Use
 Choices
   Saved to <Choices$Write>.Claude.Choices in plain text,
   API key included.
+
+CLAUDE.md
+  Instructions sent to Claude with every message, for example
+  "Reply in plain British English". Click Edit... in Choices to
+  open it in your text editor; the first time, !Claude creates it
+  with starter instructions. Save it in the editor and the change
+  applies to your next message. Delete the file to send none.
+  Stored as <Choices$Write>.Claude.CLAUDE/md.
 
 Limits
   Text only. No streaming, no attachments, no saved transcripts.
