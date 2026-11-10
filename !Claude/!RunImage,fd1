@@ -57,6 +57,9 @@ checking%=FALSE : checkstart%=0 : newtag$=""
 DIM updmsg% 128
 REM Token usage: this conversation, and since the credit balance was set.
 sessin%=0 : sessout%=0
+REM Saved conversations: the current one's file and title, and the list.
+curconv$="" : curtitle$="" : dirty%=FALSE : maxconv%=20 : nconv%=0 : nall%=0
+DIM convfile$(maxconv%), convtitle$(maxconv%), allname$(200), convtext% 64*(maxconv%+1), dirbuf% 2048
 DIM usebuf1% 100, usebuf2% 100, usebuf3% 100, credbuf% 16, pinbuf% 16, poutbuf% 16
 $b64tab%="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
 DIM hist% bufsize%, disp% bufsize%, resp% bufsize%
@@ -250,16 +253,19 @@ PROCitem(ibmenu%,0,"Info",infow%,0)
 PROCitem(ibmenu%,1,"Choices...",-1,0)
 PROCitem(ibmenu%,2,"Quit",-1,&80)
 attmenu%=FNnewmenu("Attachments",keepmax%)
-winmenu%=FNnewmenu(app$,9)
-PROCitem(winmenu%,0,"Save conversation",savew%,&08)
+convmenu%=FNnewmenu("Saved chats",maxconv%+1)
+winmenu%=FNnewmenu(app$,11)
+PROCitem(winmenu%,0,"Export as text",savew%,&08)
 PROCitem(winmenu%,1,"Save reply",savew%,&08)
 PROCitem(winmenu%,2,"Save code",savew%,&08)
 PROCitem(winmenu%,3,"Save attachment",attmenu%,&02)
 PROCitem(winmenu%,4,"Copy",-1,0)
 PROCitem(winmenu%,5,"Select all",-1,&02)
-PROCitem(winmenu%,6,"Usage...",-1,&02)
-PROCitem(winmenu%,7,"Clear",-1,0)
-PROCitem(winmenu%,8,"Choices...",-1,&80)
+PROCitem(winmenu%,6,"Save conversation",-1,0)
+PROCitem(winmenu%,7,"Saved conversations",convmenu%,&02)
+PROCitem(winmenu%,8,"Usage...",-1,&02)
+PROCitem(winmenu%,9,"Clear",-1,0)
+PROCitem(winmenu%,10,"Choices...",-1,&80)
 curmenu%=0 : menux%=0 : menuy%=0
 ENDPROC
 
@@ -398,6 +404,7 @@ LOCAL w%,k%
 w%=blk%!0 : k%=blk%!24
 CASE TRUE OF
   WHEN w%=panew% AND k%=13 : PROCsend
+  WHEN k%=&183 : PROCstoreconv
   WHEN k%=3 AND sels%<>sele% : PROCcopy
   WHEN w%=choicesw% AND k%=13 : PROCsetchoices(4)
   WHEN w%=choicesw% AND k%=27 : PROCcancelchoices(4)
@@ -435,9 +442,11 @@ CASE curmenu% OF
     CASE s% OF
       WHEN 4 : PROCcopy
       WHEN 5 : PROCsetsel(0,displen%)
-      WHEN 6 : PROCopenusage
-      WHEN 7 : PROCclear
-      WHEN 8 : PROCopenchoices
+      WHEN 6 : PROCstoreconv
+      WHEN 7 : PROCconvchosen(blk%!4)
+      WHEN 8 : PROCopenusage
+      WHEN 9 : PROCclear
+      WHEN 10 : PROCopenchoices
     ENDCASE
 ENDCASE
 IF (ptr%!8 AND 1) AND NOT quit% THEN SYS "Wimp_CreateMenu",,curmenu%,menux%,menuy%
@@ -658,6 +667,7 @@ WHILE i%<n%
   i%+=1
 ENDWHILE
 PROChistbegin(1) : PROChistesc(inbuf%,n%) : PROCattachtext : PROChistend
+dirty%=TRUE
 PROCdelscratch
 SYS "Hourglass_On"
 PROCwritereq : PROCwritecfg : PROCwriteobey
@@ -1011,14 +1021,19 @@ PROCredrawicon(attw%,0)
 PROCsettitle
 ENDPROC
 
-REM Title: waiting while busy, else the number of files attached.
+REM Title: the saved conversation's title, with " *" if it has changed
+REM since it was saved, then whether a reply is awaited or files attached.
 DEF PROCsettitle
+LOCAL t$
+t$=app$
+IF curtitle$<>"" THEN t$+=": "+LEFT$(curtitle$,30)
+IF dirty% AND curconv$<>"" THEN t$+=" *"
 CASE TRUE OF
-  WHEN busy% : $titlebuf%=app$+" (waiting for a reply)"
-  WHEN FNpending=1 : $titlebuf%=app$+" (1 file attached)"
-  WHEN FNpending>1 : $titlebuf%=app$+" ("+STR$FNpending+" files attached)"
-  OTHERWISE $titlebuf%=app$
+  WHEN busy% : t$+=" (waiting for a reply)"
+  WHEN FNpending=1 : t$+=" (1 file attached)"
+  WHEN FNpending>1 : t$+=" ("+STR$FNpending+" files attached)"
 ENDCASE
+$titlebuf%=LEFT$(t$,63)
 SYS "Wimp_ForceRedraw",mainw%,&4B534154,3
 ENDPROC
 
@@ -1083,7 +1098,7 @@ ENDPROC
 
 REM ---------------------------------------------------------------
 REM Saving
-REM The window menu offers Save conversation, Save reply and Save code,
+REM The window menu offers Export as text, Save reply and Save code,
 REM each opening the Save as box. Files are saved by dragging its icon
 REM to a Filer window (Message_DataSave protocol) or by typing a full
 REM pathname and clicking Save.
@@ -1099,6 +1114,8 @@ PROCbuildattmenu
 PROCshade(winmenu%,3,natt%=0)
 PROCshade(winmenu%,4,sels%=sele%)
 PROCshade(winmenu%,5,displen%=0)
+PROCshade(winmenu%,6,displen%=0)
+PROCbuildconvmenu
 ENDPROC
 
 REM Shade item i% of menu m% if on% is TRUE, else unshade it.
@@ -1513,6 +1530,191 @@ $(blk%+44)="Clipboard" : blk%?53=0
 blk%!0=56
 SYS "Wimp_SendMessage",18,blk%,blk%!4
 saveout%=blk%!8 : saveclip%=TRUE
+ENDPROC
+
+REM ---------------------------------------------------------------
+REM Saved conversations
+REM Save conversation writes the history, the display text and this
+REM conversation's token counts to a file in <Choices$Write>.Claude.Chats,
+REM named from the date and time (C20261110-164700). Saving again updates
+REM the same file. Saved conversations lists the newest ones by date and
+REM title; choosing one loads it in place of the current conversation.
+REM File: "CLCV", format 1, history length, display length, input and
+REM output tokens, title length (all words), title, history, display.
+REM ---------------------------------------------------------------
+
+REM Save the conversation, creating its file the first time.
+DEF PROCstoreconv
+LOCAL f%
+IF displen%=0 THEN ENDPROC
+IF busy% THEN PROCwarn("Wait for Claude's reply before saving the conversation.") : ENDPROC
+SYS "OS_File",8,"<Choices$Write>.Claude",,,0
+SYS "OS_File",8,"<Choices$Write>.Claude.Chats",,,0
+IF curconv$="" THEN curconv$=FNcanon("<Choices$Write>.Claude.Chats")+"."+FNstamp : curtitle$=FNconvtitle
+f%=OPENOUT curconv$
+PROCputword(f%,&56434C43) : PROCputword(f%,1)
+PROCputword(f%,histlen%) : PROCputword(f%,displen%)
+PROCputword(f%,sessin%) : PROCputword(f%,sessout%)
+PROCputword(f%,LEN curtitle$)
+IF curtitle$<>"" THEN PROCput(f%,curtitle$)
+IF histlen%>0 THEN SYS "OS_GBPB",2,f%,hist%,histlen%
+IF displen%>0 THEN SYS "OS_GBPB",2,f%,disp%,displen%
+CLOSE#f%
+SYS "OS_File",18,curconv$,&FFD
+dirty%=FALSE
+PROCsettitle
+ENDPROC
+
+REM Load saved conversation f$, after checking the current one may go.
+DEF PROCloadconv(f$)
+LOCAL h%,hl%,dl%,si%,so%,tl%,t$
+IF busy% THEN PROCwarn("Wait for Claude's reply before opening another conversation.") : ENDPROC
+IF dirty% AND displen%>0 THEN
+  IF NOT FNconfirm("The current conversation has changes that are not saved. Discard them?") THEN ENDPROC
+ENDIF
+h%=OPENIN f$
+IF h%=0 THEN PROCwarn("Could not open the saved conversation.") : ENDPROC
+IF FNgetword(h%)<>&56434C43 OR FNgetword(h%)<>1 THEN CLOSE#h% : PROCwarn("This is not a conversation saved by this version of Claude.") : ENDPROC
+hl%=FNgetword(h%) : dl%=FNgetword(h%) : si%=FNgetword(h%) : so%=FNgetword(h%) : tl%=FNgetword(h%)
+IF hl%<0 OR dl%<0 OR tl%<0 OR hl%>=bufsize% OR dl%>=bufsize% OR tl%>255 THEN CLOSE#h% : PROCwarn("The saved conversation is damaged.") : ENDPROC
+t$=""
+WHILE LEN t$<tl%
+  t$+=CHR$BGET#h%
+ENDWHILE
+IF hl%>0 THEN SYS "OS_GBPB",4,h%,hist%,hl%
+IF dl%>0 THEN SYS "OS_GBPB",4,h%,disp%,dl%
+CLOSE#h%
+histlen%=hl% : displen%=dl% : sessin%=si% : sessout%=so%
+curconv$=f$ : curtitle$=t$ : dirty%=FALSE : sels%=0 : sele%=0
+PROCdropsent
+PROCusagefields
+PROCsettitle
+PROCshowmain
+PROCrefresh
+ENDPROC
+
+REM Write n% to file f% as a little-endian word.
+DEF PROCputword(f%,n%)
+BPUT#f%,n% AND &FF : BPUT#f%,(n%>>>8) AND &FF
+BPUT#f%,(n%>>>16) AND &FF : BPUT#f%,(n%>>>24) AND &FF
+ENDPROC
+
+REM Read a little-endian word from file f%.
+DEF FNgetword(f%)
+LOCAL n%
+n%=BGET#f% : n%+=(BGET#f%)<<8 : n%+=(BGET#f%)<<16 : n%+=(BGET#f%)<<24
+=n%
+
+REM Ask m$ with OK and Cancel; TRUE if OK.
+DEF FNconfirm(m$)
+LOCAL r%
+SYS "Wimp_ReportError",FNerr(m$),3+16,app$ TO ,r%
+=(r%=1)
+
+REM Title for a new saved conversation: the start of its first message.
+DEF FNconvtitle
+LOCAL p%,t$
+t$="" : p%=0
+WHILE p%<displen% AND disp%?p%<>1
+  p%+=1
+ENDWHILE
+p%+=1
+WHILE p%<displen% AND disp%?p%>=32 AND LEN t$<40
+  t$+=CHR$(disp%?p%) : p%+=1
+ENDWHILE
+IF t$="" THEN t$="Conversation"
+=t$
+
+REM Leaf name from the date and time, such as C20261110-164700.
+DEF FNstamp
+LOCAL t$,m%
+t$=TIME$
+m%=(INSTR("JanFebMarAprMayJunJulAugSepOctNovDec",MID$(t$,8,3))+2) DIV 3
+=("C"+MID$(t$,12,4)+RIGHT$("0"+STR$m%,2)+MID$(t$,5,2)+"-"+MID$(t$,17,2)+MID$(t$,20,2)+MID$(t$,23,2))
+
+REM Find the saved conversations, newest first, keeping up to maxconv%.
+DEF PROCscanconvs
+LOCAL d$,t%,o%,r%,p%,i%,j%,n$
+nconv%=0 : nall%=0
+d$="<Choices$Write>.Claude.Chats"
+SYS "XOS_File",17,d$ TO t%
+IF t%<>2 THEN ENDPROC
+o%=0
+WHILE o%<>-1 AND nall%<200
+  SYS "OS_GBPB",9,d$,dirbuf%,50,o%,2048,"C*" TO ,,,r%,o%
+  p%=dirbuf%
+  WHILE r%>0 AND nall%<200
+    allname$(nall%)=FNcstr(p%) : p%+=LEN allname$(nall%)+1 : nall%+=1 : r%-=1
+  ENDWHILE
+ENDWHILE
+REM Insertion sort, newest (largest name) first.
+i%=1
+WHILE i%<nall%
+  n$=allname$(i%) : j%=i%-1
+  WHILE j%>=0 AND allname$(j%)<n$
+    allname$(j%+1)=allname$(j%) : j%-=1
+  ENDWHILE
+  allname$(j%+1)=n$
+  i%+=1
+ENDWHILE
+d$=FNcanon(d$)
+WHILE nconv%<nall% AND nconv%<maxconv%
+  convfile$(nconv%)=d$+"."+allname$(nconv%)
+  convtitle$(nconv%)=FNreadtitle(convfile$(nconv%))
+  nconv%+=1
+ENDWHILE
+ENDPROC
+
+REM Title stored in saved conversation f$, or its leaf name.
+DEF FNreadtitle(f$)
+LOCAL h%,i%,tl%,t$
+t$=FNleaf(f$)
+h%=OPENIN f$
+IF h%<>0 THEN
+  IF FNgetword(h%)=&56434C43 THEN
+    FOR i%=1 TO 5 : tl%=FNgetword(h%) : NEXT
+    tl%=FNgetword(h%)
+    IF tl%>0 AND tl%<256 THEN
+      t$=""
+      WHILE LEN t$<tl%
+        t$+=CHR$BGET#h%
+      ENDWHILE
+    ENDIF
+  ENDIF
+  CLOSE#h%
+ENDIF
+=t$
+
+REM Fill the Saved conversations submenu: one item per conversation,
+REM showing its date and title, then Open directory.
+DEF PROCbuildconvmenu
+LOCAL i%,a%,w%,s$,n$
+PROCscanconvs
+w%=LEN "Saved chats"*16+16 : i%=0
+WHILE i%<=nconv%
+  a%=convmenu%+28+24*i%
+  IF i%<nconv% THEN
+    n$=FNleaf(convfile$(i%))
+    s$=MID$(n$,8,2)+" "+MID$("JanFebMarAprMayJunJulAugSepOctNovDec",VAL(MID$(n$,6,2))*3-2,3)+"  "+convtitle$(i%)
+    a%!0=0 : IF i%=nconv%-1 THEN a%!0=&02
+  ELSE
+    s$="Open directory" : a%!0=&80
+  ENDIF
+  $(convtext%+64*i%)=LEFT$(s$,60)
+  a%!4=-1 : a%!8=&07000121 : a%!12=convtext%+64*i% : a%!16=-1 : a%!20=64
+  IF LEN s$*16+16>w% THEN w%=LEN s$*16+16
+  i%+=1
+ENDWHILE
+convmenu%!16=w%
+ENDPROC
+
+REM A Saved conversations item was chosen: load it, or open the directory.
+DEF PROCconvchosen(j%)
+IF j%<0 THEN ENDPROC
+IF j%<nconv% THEN PROCloadconv(convfile$(j%)) : ENDPROC
+SYS "OS_File",8,"<Choices$Write>.Claude",,,0
+SYS "OS_File",8,"<Choices$Write>.Claude.Chats",,,0
+OSCLI "Filer_OpenDir <Choices$Write>.Claude.Chats"
 ENDPROC
 
 REM ---------------------------------------------------------------
@@ -2038,7 +2240,9 @@ REM Empty the conversation, unless a request is running.
 DEF PROCclear
 IF busy% THEN ENDPROC
 histlen%=0 : displen%=0 : sels%=0 : sele%=0 : sessin%=0 : sessout%=0
+curconv$="" : curtitle$="" : dirty%=FALSE
 PROCusagefields
+PROCsettitle
 PROCdropsent
 PROCrefresh
 ENDPROC

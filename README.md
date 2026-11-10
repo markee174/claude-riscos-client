@@ -33,7 +33,8 @@ It is deliberately simple:
 
 - **SELECT** on the icon bar icon opens the conversation window.
 - **MENU** on the icon bar icon: Info, Choices, Quit.
-- **MENU** over the window: Save conversation, Save reply, Save code, Save attachment, Copy, Select all, Usage, Clear, Choices.
+- **MENU** over the window: Export as text, Save reply, Save code, Save attachment, Copy, Select all, Save conversation, Saved conversations, Usage, Clear, Choices.
+- **Saved conversations:** Save conversation (or F3) keeps the conversation; Saved conversations lists them by date and title so you can reload one and carry on.
 - **Selecting text:** drag with SELECT over the conversation, click ADJUST to extend, double-click for a paragraph. **Copy** puts it on the clipboard.
 - **Saving:** each Save item opens a Save as box; drag its icon to a Filer window. **Save code** saves the code blocks from Claude's last reply, with BBC BASIC saved as BASIC text ready to run.
 - Interactive Help works on every window.

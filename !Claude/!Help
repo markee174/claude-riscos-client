@@ -13,14 +13,24 @@ Requirements
 Use
   Click SELECT on the icon bar icon to open the conversation.
   Type in the field at the top and press Return or click Send.
-  MENU over the window: Save conversation, Save reply,
-  Save code, Save attachment, Copy, Select all, Usage,
-  Clear, Choices.
+  MENU over the window: Export as text, Save reply, Save code,
+  Save attachment, Copy, Select all, Save conversation, Saved
+  conversations, Usage, Clear, Choices.
   MENU over the icon bar icon: Info, Choices, Quit.
 
 Choices
   Saved to <Choices$Write>.Claude.Choices in plain text,
   API key included.
+
+Saved conversations
+  Choose Save conversation from the window menu (or press F3) to
+  keep the conversation so you can carry on with it later. Saving
+  again updates it; the title bar shows " *" when it has changed
+  since. Saved conversations lists the newest 20 by date and the
+  start of their first message; choose one to reload it. Open
+  directory at the end of the list shows them all in the Filer,
+  where you can delete the ones you no longer want. They are kept
+  in <Choices$Write>.Claude.Chats.
 
 Token usage
   After each reply a grey note shows the tokens it used. Untick
@@ -61,7 +71,7 @@ Selecting and copying
   then paste it into any application that supports the clipboard.
 
 Saving
-  MENU over the window: Save conversation, Save reply and Save
+  MENU over the window: Export as text, Save reply and Save
   code each open a Save as box. Drag its icon to a Filer window,
   or type a full pathname and click Save. Save code saves the
   code blocks from Claude's last reply; BBC BASIC code is saved

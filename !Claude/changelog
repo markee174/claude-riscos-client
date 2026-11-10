@@ -8,6 +8,11 @@ All notable changes to !Claude. Version numbers match `!Help` and the Info box.
 - Token usage. After each reply, a grey note shows the input and output tokens it used. **Show token usage after each reply** in Choices turns this off.
 - **Usage...** in the window menu opens a Token usage window showing tokens used in this conversation and since your credit balance was last set.
 - Enter your credit balance and your model's prices per million tokens in that window, and !Claude estimates the cost and the credit left. The Anthropic API cannot report the real balance, so this is an estimate: check console.anthropic.com and set the balance again from time to time. Setting a new balance restarts the totals from that day.
+- Saved conversations. **Save conversation** in the window menu (or F3) keeps the whole conversation, history included, in `<Choices$Write>.Claude.Chats`; saving again updates it. **Saved conversations** lists the newest 20 by date and title, and choosing one reloads it so you can carry on. **Open directory** at the end of the list shows them all in the Filer.
+- The title bar shows the saved conversation's title, with " *" when it has changed since it was saved. Opening another conversation over unsaved changes asks first.
+
+### Changed
+- The window menu's text export is now called **Export as text**, so that **Save conversation** can mean keeping the conversation to reload.
 
 ## 0.09 (1 Nov 2026)
 
