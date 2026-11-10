@@ -33,13 +33,15 @@ It is deliberately simple:
 
 - **SELECT** on the icon bar icon opens the conversation window.
 - **MENU** on the icon bar icon: Info, Choices, Quit.
-- **MENU** over the window: Save conversation, Save reply, Save code, Save attachment, Copy, Select all, Clear, Choices.
+- **MENU** over the window: Save conversation, Save reply, Save code, Save attachment, Copy, Select all, Usage, Clear, Choices.
 - **Selecting text:** drag with SELECT over the conversation, click ADJUST to extend, double-click for a paragraph. **Copy** puts it on the clipboard.
 - **Saving:** each Save item opens a Save as box; drag its icon to a Filer window. **Save code** saves the code blocks from Claude's last reply, with BBC BASIC saved as BASIC text ready to run.
 - Interactive Help works on every window.
 - **Attaching files:** drag files onto the conversation window or the icon bar icon, or click **Attach...**. Text files are sent in full; JPEG, PNG, GIF, WebP and PDF files are sent as images and documents. Up to 8 files and 3MB per message.
 
 **CLAUDE.md** holds instructions sent to Claude with every message, such as "Reply in plain British English". Click **Edit...** in Choices to open it in your text editor; save it there and the change applies to your next message. It is stored as `<Choices$Write>.Claude.CLAUDE/md`.
+
+**Token usage:** a note after each reply shows the tokens it used. **Usage...** in the window menu shows totals and, once you enter your credit balance and prices, an estimate of the credit left. The API cannot report your real balance, so it is an estimate.
 
 **Updates:** when !Claude starts, it checks GitHub for a newer release and offers to copy the Releases page address to the clipboard. You can skip a particular release, or turn the check off in Choices.
 

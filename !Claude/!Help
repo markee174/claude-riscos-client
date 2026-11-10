@@ -1,4 +1,4 @@
-Claude 0.09 (1 Nov 2026)
+Claude 0.10 (10 Nov 2026)
 =========================
 
 A desktop client for Claude, using the Anthropic Messages API.
@@ -14,12 +14,24 @@ Use
   Click SELECT on the icon bar icon to open the conversation.
   Type in the field at the top and press Return or click Send.
   MENU over the window: Save conversation, Save reply,
-  Save code, Save attachment, Copy, Select all, Clear, Choices.
+  Save code, Save attachment, Copy, Select all, Usage,
+  Clear, Choices.
   MENU over the icon bar icon: Info, Choices, Quit.
 
 Choices
   Saved to <Choices$Write>.Claude.Choices in plain text,
   API key included.
+
+Token usage
+  After each reply a grey note shows the tokens it used. Untick
+  "Show token usage after each reply" in Choices to hide it.
+  Choose Usage from the window menu to see totals for this
+  conversation and since you last set your credit balance. Enter
+  your balance from console.anthropic.com and your model's prices
+  per million tokens from Anthropic's pricing page, and Claude
+  estimates the cost and the credit left. The API cannot report
+  your real balance, so check the Console now and then and set the
+  balance again.
 
 Updates
   When Claude starts it checks GitHub for a newer release. If

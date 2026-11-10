@@ -8,7 +8,7 @@ REM OF ANY KIND, either express or implied.
 
 REM >!RunImage for !Claude
 REM A RISC OS desktop client for the Anthropic Messages API.
-REM 0.09 (1 Nov 2026).
+REM 0.10 (10 Nov 2026).
 REM Requests go through curl in a TaskWindow, so the desktop keeps
 REM multitasking while Claude replies.
 
@@ -29,7 +29,7 @@ REM ---------------------------------------------------------------
 
 REM Set constants, claim buffers, start the Wimp task and build the UI.
 DEF PROCinit
-app$="Claude" : version$="0.09 (1 Nov 2026)"
+app$="Claude" : version$="0.10 (10 Nov 2026)"
 toolh%=96 : lh%=40 : margin%=16 : maxl%=8000 : bufsize%=256*1024
 quit%=FALSE : busy%=FALSE : lastw%=0 : avail%=0 : started%=0
 DIM blk% 1024, blk2% 64, ws% 64, ext% 16, ptr% 32
@@ -55,6 +55,9 @@ REM Update check: the GitHub repository whose latest release is checked.
 updrepo$="markee174/claude-riscos-client"
 checking%=FALSE : checkstart%=0 : newtag$=""
 DIM updmsg% 128
+REM Token usage: this conversation, and since the credit balance was set.
+sessin%=0 : sessout%=0
+DIM usebuf1% 100, usebuf2% 100, usebuf3% 100, credbuf% 16, pinbuf% 16, poutbuf% 16
 $b64tab%="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
 DIM hist% bufsize%, disp% bufsize%, resp% bufsize%
 DIM ls%(maxl%), ll%(maxl%), lc%(maxl%)
@@ -123,18 +126,19 @@ PROCinforow(4,-132,"Author","Mark Stephens")
 PROCinforow(6,-188,"Version",version$)
 SYS "Wimp_CreateWindow",,blk% TO infow%
 REM Choices window: three writable fields, Cancel and Set.
-PROCwin(300,400,1060,808,&87000012,1,0,-408,760,0,FNstr("Claude choices"),15,0,11)
+PROCwin(300,400,1060,864,&87000012,1,0,-464,760,0,FNstr("Claude choices"),15,0,12)
 PROClabel(0,-20,"API key")
 PROCfield(1,204,-20,744,keybuf%,256,"Pptr_write;Kta;D*")
 PROClabel(2,-76,"Model")
 PROCfield(3,204,-76,744,modelbuf%,64,"Pptr_write;Kta")
 PROClabel(4,-132,"CA file")
 PROCfield(5,204,-132,744,certbuf%,256,"Pptr_write;Kta")
-PROCbutton(6,404,-384,564,-328,"Cancel","R5,3")
-PROCbutton(7,580,-392,748,-320,"Set","R6,3")
+PROCbutton(6,404,-440,564,-384,"Cancel","R5,3")
+PROCbutton(7,580,-448,748,-376,"Set","R6,3")
 PROClabel(8,-188,"CLAUDE.md")
 PROCbutton(9,204,-244,364,-188,"Edit...","R5,3")
 PROCoption(10,204,-252,744,"Check for updates when Claude starts")
+PROCoption(11,204,-308,744,"Show token usage after each reply")
 SYS "Wimp_CreateWindow",,blk% TO choicesw%
 REM Conversation window: white work area, painted by PROCredraw.
 PROCwin(200,240,1000,900,&BF000002,0,0,-1000,2000,0,titlebuf%,64,10,0)
@@ -172,6 +176,17 @@ PROCoption(2,16,-132,744,"Don't show this message for this update again")
 PROCbutton(3,348,-268,508,-212,"Later","R5,3")
 PROCbutton(4,524,-276,744,-204,"Copy address","R6,3")
 SYS "Wimp_CreateWindow",,blk% TO updw%
+REM Usage window: three display rows, three writable fields, Cancel, Set.
+PROCwin(340,360,1100,788,&87000012,1,0,-428,760,0,FNstr("Token usage"),12,0,14)
+PROCulabel(0,-20,"Conversation") : PROCicon(1,244,-72,744,-20,&17000135,usebuf1%,FNstr("R2"),100)
+PROCulabel(2,-76,"Since set") : PROCicon(3,244,-128,744,-76,&17000135,usebuf2%,FNstr("R2"),100)
+PROCulabel(4,-132,"Credit left") : PROCicon(5,244,-184,744,-132,&17000135,usebuf3%,FNstr("R2"),100)
+PROCulabel(6,-204,"Credit $") : PROCfield(7,244,-204,444,credbuf%,16,"Pptr_write;Kta;A0-9.")
+PROCulabel(8,-260,"Input $/M") : PROCfield(9,244,-260,444,pinbuf%,16,"Pptr_write;Kta;A0-9.")
+PROCulabel(10,-316,"Output $/M") : PROCfield(11,244,-316,444,poutbuf%,16,"Pptr_write;Kta;A0-9.")
+PROCbutton(12,404,-404,564,-348,"Cancel","R5,3")
+PROCbutton(13,580,-412,744,-340,"Set","R6,3")
+SYS "Wimp_CreateWindow",,blk% TO usew%
 ENDPROC
 
 REM Fill blk% with a window definition. tptr% is an indirected title
@@ -217,6 +232,11 @@ DEF PROCoption(n%,x0%,y1%,x1%,t$)
 PROCicon(n%,x0%,y1%-52,x1%,y1%,&17003113,FNstr(t$),FNstr("Soptoff,opton"),LEN t$+1)
 ENDPROC
 
+REM Right-aligned label for the Usage window, 220 units wide.
+DEF PROCulabel(n%,y%,t$)
+PROCicon(n%,12,y%-52,232,y%,&17000311,FNstr(t$),-1,LEN t$+1)
+ENDPROC
+
 REM Label and display field pair for the Info window.
 DEF PROCinforow(n%,y%,l$,v$)
 PROCicon(n%,12,y%-48,192,y%,&17000311,FNstr(l$),-1,LEN l$+1)
@@ -230,15 +250,16 @@ PROCitem(ibmenu%,0,"Info",infow%,0)
 PROCitem(ibmenu%,1,"Choices...",-1,0)
 PROCitem(ibmenu%,2,"Quit",-1,&80)
 attmenu%=FNnewmenu("Attachments",keepmax%)
-winmenu%=FNnewmenu(app$,8)
+winmenu%=FNnewmenu(app$,9)
 PROCitem(winmenu%,0,"Save conversation",savew%,&08)
 PROCitem(winmenu%,1,"Save reply",savew%,&08)
 PROCitem(winmenu%,2,"Save code",savew%,&08)
 PROCitem(winmenu%,3,"Save attachment",attmenu%,&02)
 PROCitem(winmenu%,4,"Copy",-1,0)
 PROCitem(winmenu%,5,"Select all",-1,&02)
-PROCitem(winmenu%,6,"Clear",-1,0)
-PROCitem(winmenu%,7,"Choices...",-1,&80)
+PROCitem(winmenu%,6,"Usage...",-1,&02)
+PROCitem(winmenu%,7,"Clear",-1,0)
+PROCitem(winmenu%,8,"Choices...",-1,&80)
 curmenu%=0 : menux%=0 : menuy%=0
 ENDPROC
 
@@ -358,6 +379,9 @@ CASE TRUE OF
   WHEN w%=updw% AND i%=2 : PROCtoggle(updw%,2)
   WHEN w%=updw% AND i%=3 : PROCupdatelater
   WHEN w%=updw% AND i%=4 : PROCupdatedownload
+  WHEN w%=choicesw% AND i%=11 : PROCtoggle(choicesw%,11)
+  WHEN w%=usew% AND i%=12 : PROCusagecancel(b%)
+  WHEN w%=usew% AND i%=13 : PROCusageset(b%)
   WHEN w%=panew% AND i%=2 : PROCopenatt
   WHEN w%=attw% AND i%=3 : PROCaddpath
   WHEN w%=savew% AND i%=0 AND (b% AND &50)<>0 : PROCstartdrag
@@ -382,6 +406,8 @@ CASE TRUE OF
   WHEN w%=savew% AND k%=27 : SYS "Wimp_CreateMenu",,-1
   WHEN w%=updw% AND k%=13 : PROCupdatedownload
   WHEN w%=updw% AND k%=27 : PROCupdatelater
+  WHEN w%=usew% AND k%=13 : PROCusageset(4)
+  WHEN w%=usew% AND k%=27 : PROCusagecancel(4)
   WHEN w%=attw% AND k%=27 : blk2%!0=attw% : SYS "Wimp_CloseWindow",,blk2%
   OTHERWISE SYS "Wimp_ProcessKey",k%
 ENDCASE
@@ -409,8 +435,9 @@ CASE curmenu% OF
     CASE s% OF
       WHEN 4 : PROCcopy
       WHEN 5 : PROCsetsel(0,displen%)
-      WHEN 6 : PROCclear
-      WHEN 7 : PROCopenchoices
+      WHEN 6 : PROCopenusage
+      WHEN 7 : PROCclear
+      WHEN 8 : PROCopenchoices
     ENDCASE
 ENDCASE
 IF (ptr%!8 AND 1) AND NOT quit% THEN SYS "Wimp_CreateMenu",,curmenu%,menux%,menuy%
@@ -470,9 +497,21 @@ CASE w% OF
       WHEN 7 : h$="Click SELECT to save these choices and close this window.|MClick ADJUST to save them and keep it open."
       WHEN 8,9 : h$="Click SELECT to edit CLAUDE.md, the instructions sent to Claude with every message. Save it in your editor; the change applies to your next message."
       WHEN 10 : h$="When this is ticked, Claude checks GitHub for a newer release each time it starts."
+      WHEN 11 : h$="When this is ticked, a grey note after each reply shows the tokens it used and, with prices set in the Usage window, the cost."
       OTHERWISE h$="Set your API key and model here."
     ENDCASE
   WHEN infow% : h$="This window shows information about Claude."
+  WHEN usew% :
+    CASE i% OF
+      WHEN 0,1 : h$="Tokens used in this conversation, and their estimated cost."
+      WHEN 2,3 : h$="Tokens used since you last set your credit balance."
+      WHEN 4,5 : h$="An estimate of the credit you have left. The API cannot report your real balance; check it at console.anthropic.com."
+      WHEN 6,7 : h$="Your credit balance in dollars, from console.anthropic.com. Changing it restarts the totals from today."
+      WHEN 8,9 : h$="Your model's price per million input tokens, in dollars, from Anthropic's pricing page."
+      WHEN 10,11 : h$="Your model's price per million output tokens, in dollars, from Anthropic's pricing page."
+      WHEN 12 : h$="Click SELECT to close without saving.|MClick ADJUST to restore the saved values."
+      WHEN 13 : h$="Click SELECT to save and close.|MClick ADJUST to save and keep this window open."
+    ENDCASE
   WHEN updw% :
     CASE i% OF
       WHEN 2 : h$="Tick this to stop Claude telling you about this update. You will still hear about later ones."
@@ -500,6 +539,7 @@ REM Read key$, model$ and cert$ from Choices:Claude.Choices.
 DEF PROCloadchoices
 LOCAL f%,l$
 key$="" : model$="claude-sonnet-5-5" : cert$="" : checkupd%=TRUE : skiptag$=""
+showusage%=TRUE : credit$="" : creditdate$="" : pin$="" : pout$="" : totin%=0 : totout%=0
 f%=OPENIN "Choices:Claude.Choices"
 IF f%=0 THEN ENDPROC
 WHILE NOT EOF#f%
@@ -509,6 +549,13 @@ WHILE NOT EOF#f%
   IF LEFT$(l$,7)="CAFile:" THEN cert$=MID$(l$,8)
   IF LEFT$(l$,13)="CheckUpdates:" THEN checkupd%=(MID$(l$,14)<>"0")
   IF LEFT$(l$,12)="SkipVersion:" THEN skiptag$=MID$(l$,13)
+  IF LEFT$(l$,10)="ShowUsage:" THEN showusage%=(MID$(l$,11)<>"0")
+  IF LEFT$(l$,7)="Credit:" THEN credit$=MID$(l$,8)
+  IF LEFT$(l$,11)="CreditDate:" THEN creditdate$=MID$(l$,12)
+  IF LEFT$(l$,8)="PriceIn:" THEN pin$=MID$(l$,9)
+  IF LEFT$(l$,9)="PriceOut:" THEN pout$=MID$(l$,10)
+  IF LEFT$(l$,7)="UsedIn:" THEN totin%=VAL(MID$(l$,8))
+  IF LEFT$(l$,8)="UsedOut:" THEN totout%=VAL(MID$(l$,9))
 ENDWHILE
 CLOSE#f%
 ENDPROC
@@ -523,6 +570,13 @@ PROCline(f%,"Model:"+model$)
 PROCline(f%,"CAFile:"+cert$)
 IF checkupd% THEN PROCline(f%,"CheckUpdates:1") ELSE PROCline(f%,"CheckUpdates:0")
 PROCline(f%,"SkipVersion:"+skiptag$)
+IF showusage% THEN PROCline(f%,"ShowUsage:1") ELSE PROCline(f%,"ShowUsage:0")
+PROCline(f%,"Credit:"+credit$)
+PROCline(f%,"CreditDate:"+creditdate$)
+PROCline(f%,"PriceIn:"+pin$)
+PROCline(f%,"PriceOut:"+pout$)
+PROCline(f%,"UsedIn:"+STR$totin%)
+PROCline(f%,"UsedOut:"+STR$totout%)
 CLOSE#f%
 ENDPROC
 
@@ -539,6 +593,7 @@ DEF PROCfillchoices
 $keybuf%=key$ : $modelbuf%=model$ : $certbuf%=cert$
 PROCredrawicon(choicesw%,1) : PROCredrawicon(choicesw%,3) : PROCredrawicon(choicesw%,5)
 PROCsetselected(choicesw%,10,checkupd%)
+PROCsetselected(choicesw%,11,showusage%)
 ENDPROC
 
 REM Save the Choices window fields; SELECT (b%=4) also closes it.
@@ -547,6 +602,7 @@ key$=FNtrim(FNcstr(keybuf%))
 model$=FNtrim(FNcstr(modelbuf%))
 cert$=FNtrim(FNcstr(certbuf%))
 checkupd%=FNselected(choicesw%,10)
+showusage%=FNselected(choicesw%,11)
 IF model$="" THEN model$="claude-sonnet-5-5"
 PROCsavechoices
 IF b%<>1 THEN blk2%!0=choicesw% : SYS "Wimp_CloseWindow",,blk2%
@@ -1460,6 +1516,130 @@ saveout%=blk%!8 : saveclip%=TRUE
 ENDPROC
 
 REM ---------------------------------------------------------------
+REM Token usage and credit estimate
+REM Each reply's "usage" gives input and output tokens. They are added
+REM to this conversation's totals and to the totals since the credit
+REM balance was last set. With prices entered, the Usage window shows an
+REM estimated cost and how much credit is left. The Anthropic API has no
+REM way to read the real balance, so this is only ever an estimate.
+REM ---------------------------------------------------------------
+
+REM Add the usage in the reply in resp% to the totals; note it if wanted.
+DEF PROCcountusage
+LOCAL i%,o%
+i%=FNnumkey("input_tokens") : o%=FNnumkey("output_tokens")
+IF i%<0 OR o%<0 THEN ENDPROC
+sessin%+=i% : sessout%+=o% : totin%+=i% : totout%+=o%
+PROCsavechoices
+PROCusagefields
+IF showusage% THEN PROCnote(FNcommas(i%)+" tokens in, "+FNcommas(o%)+" out"+FNcostnote(i%,o%)+".")
+ENDPROC
+
+REM Value of the numeric JSON field k$ in resp%, or -1 if absent.
+DEF FNnumkey(k$)
+LOCAL q$,p%,j%,v%,r%
+q$=""""+k$+"""" : p%=0 : r%=-1
+WHILE r%<0 AND p%<resplen%
+  IF resp%?p%=34 THEN
+    IF FNmatch(p%,q$) THEN
+      j%=FNskipws(p%+LEN q$)
+      IF resp%?j%=58 THEN
+        j%=FNskipws(j%+1) : v%=0
+        IF resp%?j%>=48 AND resp%?j%<=57 THEN
+          WHILE resp%?j%>=48 AND resp%?j%<=57
+            v%=v%*10+resp%?j%-48 : j%+=1
+          ENDWHILE
+          r%=v%
+        ENDIF
+      ENDIF
+    ENDIF
+  ENDIF
+  p%+=1
+ENDWHILE
+=r%
+
+REM Estimated cost in dollars of i% input and o% output tokens, or -1
+REM if the prices have not been entered.
+DEF FNcost(i%,o%)
+LOCAL c
+c=-1
+IF pin$<>"" AND pout$<>"" THEN c=i%*VAL(pin$)/1E6+o%*VAL(pout$)/1E6
+=c
+
+REM ", about $x" for i% and o% tokens, or "" without prices.
+DEF FNcostnote(i%,o%)
+LOCAL s$
+s$=""
+IF FNcost(i%,o%)>=0 THEN s$=", about "+FNmoney(FNcost(i%,o%))
+=s$
+
+REM x dollars as $d.cc, rounded to the nearest cent.
+DEF FNmoney(x)
+LOCAL c%,s$
+s$="$"
+IF x<0 THEN s$="-$" : x=-x
+c%=INT(x*100+0.5)
+=s$+STR$(c% DIV 100)+"."+RIGHT$("0"+STR$(c% MOD 100),2)
+
+REM n% with commas between thousands.
+DEF FNcommas(n%)
+LOCAL s$,t$
+s$=STR$n% : t$=""
+WHILE LEN s$>3
+  t$=","+RIGHT$(s$,3)+t$ : s$=LEFT$(s$,LEN s$-3)
+ENDWHILE
+=s$+t$
+
+REM Today's date, such as "10 Nov 2026".
+DEF FNtoday
+=MID$(TIME$,5,11)
+
+REM Fill the Usage window's display fields and redraw them.
+DEF PROCusagefields
+LOCAL c
+$usebuf1%=FNcommas(sessin%)+" in, "+FNcommas(sessout%)+" out"+FNcostnote(sessin%,sessout%)
+IF creditdate$="" THEN $usebuf2%=FNcommas(totin%)+" in, "+FNcommas(totout%)+" out"+FNcostnote(totin%,totout%) ELSE $usebuf2%=FNcommas(totin%)+" in, "+FNcommas(totout%)+" out since "+creditdate$+FNcostnote(totin%,totout%)
+c=FNcost(totin%,totout%)
+CASE TRUE OF
+  WHEN credit$="" : $usebuf3%="Enter your credit balance below."
+  WHEN c<0 : $usebuf3%="Enter the prices below to estimate it."
+  OTHERWISE $usebuf3%="About "+FNmoney(VAL(credit$)-c)+" of "+FNmoney(VAL(credit$))+" (estimate)"
+ENDCASE
+PROCredrawicon(usew%,1) : PROCredrawicon(usew%,3) : PROCredrawicon(usew%,5)
+ENDPROC
+
+REM Put the stored credit and prices into the writable fields.
+DEF PROCfillusage
+$credbuf%=credit$ : $pinbuf%=pin$ : $poutbuf%=pout$
+PROCredrawicon(usew%,7) : PROCredrawicon(usew%,9) : PROCredrawicon(usew%,11)
+ENDPROC
+
+REM Open the Usage window at the front.
+DEF PROCopenusage
+PROCfillusage : PROCusagefields
+blk%!0=usew% : SYS "Wimp_GetWindowState",,blk%
+blk%!28=-1 : SYS "Wimp_OpenWindow",,blk%
+SYS "Wimp_SetCaretPosition",usew%,7,0,0,-1,LEN credit$
+ENDPROC
+
+REM Set: store the credit and prices. A new credit balance restarts the
+REM totals from today. SELECT (b%=4) also closes the window.
+DEF PROCusageset(b%)
+LOCAL c$
+c$=FNtrim(FNcstr(credbuf%))
+pin$=FNtrim(FNcstr(pinbuf%)) : pout$=FNtrim(FNcstr(poutbuf%))
+IF c$<>credit$ THEN credit$=c$ : creditdate$=FNtoday : totin%=0 : totout%=0
+PROCsavechoices
+PROCusagefields
+IF b%<>1 THEN blk2%!0=usew% : SYS "Wimp_CloseWindow",,blk2%
+ENDPROC
+
+REM Cancel: SELECT closes the window, ADJUST restores the stored values.
+DEF PROCusagecancel(b%)
+IF b%=1 THEN PROCfillusage ELSE blk2%!0=usew% : SYS "Wimp_CloseWindow",,blk2%
+ENDPROC
+
+REM ---------------------------------------------------------------
 REM Update check
 REM At start-up, if enabled in Choices, curl fetches the latest release
 REM from the GitHub API in a TaskWindow. If its version is newer than
@@ -1641,6 +1821,7 @@ UNTIL p%<0
 IF NOT got% THEN PROCfail("Unexpected reply: "+FNpreview) : ENDPROC
 PROChistend
 PROCclearatt
+PROCcountusage
 p%=FNfindkey("stop_reason",0)
 IF p%>=0 THEN IF FNmatch(p%,"max_tokens") THEN PROCdispbyte(3) : PROCdispstr("The reply reached the 4096-token limit and stopped early.")
 ENDPROC
@@ -1856,7 +2037,8 @@ ENDPROC
 REM Empty the conversation, unless a request is running.
 DEF PROCclear
 IF busy% THEN ENDPROC
-histlen%=0 : displen%=0 : sels%=0 : sele%=0
+histlen%=0 : displen%=0 : sels%=0 : sele%=0 : sessin%=0 : sessout%=0
+PROCusagefields
 PROCdropsent
 PROCrefresh
 ENDPROC
