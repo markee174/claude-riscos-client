@@ -8,7 +8,7 @@ REM OF ANY KIND, either express or implied.
 
 REM >!RunImage for !Claude
 REM A RISC OS desktop client for the Anthropic Messages API.
-REM 0.10 (10 Nov 2026).
+REM 0.11 (13 Nov 2026).
 REM Requests go through curl in a TaskWindow, so the desktop keeps
 REM multitasking while Claude replies.
 
@@ -29,11 +29,11 @@ REM ---------------------------------------------------------------
 
 REM Set constants, claim buffers, start the Wimp task and build the UI.
 DEF PROCinit
-app$="Claude" : version$="0.10 (10 Nov 2026)"
+app$="Claude" : version$="0.11 (13 Nov 2026)"
 toolh%=96 : lh%=40 : margin%=16 : maxl%=8000 : bufsize%=256*1024
 quit%=FALSE : busy%=FALSE : lastw%=0 : avail%=0 : started%=0
 DIM blk% 1024, blk2% 64, ws% 64, ext% 16, ptr% 32
-DIM inbuf% 1024, keybuf% 256, modelbuf% 64, certbuf% 256, titlebuf% 64
+DIM inbuf% 1024, keybuf% 256, modelbuf% 64, certbuf% 256, titlebuf% 64, maxtokbuf% 16
 REM Attachments: entries 0 to firstpend%-1 have been sent and are kept
 REM so they can be saved again; firstpend% to natt%-1 are waiting to be
 REM sent. Up to maxatt% can wait at once and keepmax% can be held.
@@ -129,19 +129,21 @@ PROCinforow(4,-132,"Author","Mark Stephens")
 PROCinforow(6,-188,"Version",version$)
 SYS "Wimp_CreateWindow",,blk% TO infow%
 REM Choices window: three writable fields, Cancel and Set.
-PROCwin(300,400,1060,864,&87000012,1,0,-464,760,0,FNstr("Claude choices"),15,0,12)
+PROCwin(300,400,1060,920,&87000012,1,0,-520,760,0,FNstr("Claude choices"),15,0,14)
 PROClabel(0,-20,"API key")
 PROCfield(1,204,-20,744,keybuf%,256,"Pptr_write;Kta;D*")
 PROClabel(2,-76,"Model")
 PROCfield(3,204,-76,744,modelbuf%,64,"Pptr_write;Kta")
 PROClabel(4,-132,"CA file")
 PROCfield(5,204,-132,744,certbuf%,256,"Pptr_write;Kta")
-PROCbutton(6,404,-440,564,-384,"Cancel","R5,3")
-PROCbutton(7,580,-448,748,-376,"Set","R6,3")
+PROCbutton(6,404,-496,564,-440,"Cancel","R5,3")
+PROCbutton(7,580,-504,748,-432,"Set","R6,3")
 PROClabel(8,-188,"CLAUDE.md")
 PROCbutton(9,204,-244,364,-188,"Edit...","R5,3")
 PROCoption(10,204,-252,744,"Check for updates when Claude starts")
 PROCoption(11,204,-308,744,"Show token usage after each reply")
+PROClabel(12,-364,"Max tokens")
+PROCfield(13,204,-364,404,maxtokbuf%,16,"Pptr_write;Kta;A0-9")
 SYS "Wimp_CreateWindow",,blk% TO choicesw%
 REM Conversation window: white work area, painted by PROCredraw.
 PROCwin(200,240,1000,900,&BF000002,0,0,-1000,2000,0,titlebuf%,64,10,0)
@@ -507,6 +509,7 @@ CASE w% OF
       WHEN 8,9 : h$="Click SELECT to edit CLAUDE.md, the instructions sent to Claude with every message. Save it in your editor; the change applies to your next message."
       WHEN 10 : h$="When this is ticked, Claude checks GitHub for a newer release each time it starts."
       WHEN 11 : h$="When this is ticked, a grey note after each reply shows the tokens it used and, with prices set in the Usage window, the cost."
+      WHEN 12,13 : h$="The longest reply Claude may write, in tokens. Leave it empty for "+STR$defmaxtok%+". Raise it if replies stop early; the model sets the upper limit."
       OTHERWISE h$="Set your API key and model here."
     ENDCASE
   WHEN infow% : h$="This window shows information about Claude."
@@ -549,6 +552,7 @@ DEF PROCloadchoices
 LOCAL f%,l$
 key$="" : model$="claude-sonnet-5-5" : cert$="" : checkupd%=TRUE : skiptag$=""
 showusage%=TRUE : credit$="" : creditdate$="" : pin$="" : pout$="" : totin%=0 : totout%=0
+maxtok$="" : defmaxtok%=4096
 f%=OPENIN "Choices:Claude.Choices"
 IF f%=0 THEN ENDPROC
 WHILE NOT EOF#f%
@@ -563,6 +567,7 @@ WHILE NOT EOF#f%
   IF LEFT$(l$,11)="CreditDate:" THEN creditdate$=MID$(l$,12)
   IF LEFT$(l$,8)="PriceIn:" THEN pin$=MID$(l$,9)
   IF LEFT$(l$,9)="PriceOut:" THEN pout$=MID$(l$,10)
+  IF LEFT$(l$,10)="MaxTokens:" THEN maxtok$=MID$(l$,11)
   IF LEFT$(l$,7)="UsedIn:" THEN totin%=VAL(MID$(l$,8))
   IF LEFT$(l$,8)="UsedOut:" THEN totout%=VAL(MID$(l$,9))
 ENDWHILE
@@ -584,6 +589,7 @@ PROCline(f%,"Credit:"+credit$)
 PROCline(f%,"CreditDate:"+creditdate$)
 PROCline(f%,"PriceIn:"+pin$)
 PROCline(f%,"PriceOut:"+pout$)
+PROCline(f%,"MaxTokens:"+maxtok$)
 PROCline(f%,"UsedIn:"+STR$totin%)
 PROCline(f%,"UsedOut:"+STR$totout%)
 CLOSE#f%
@@ -599,7 +605,8 @@ ENDPROC
 
 REM Put key$, model$ and cert$ into the writable fields and redraw them.
 DEF PROCfillchoices
-$keybuf%=key$ : $modelbuf%=model$ : $certbuf%=cert$
+$keybuf%=key$ : $modelbuf%=model$ : $certbuf%=cert$ : $maxtokbuf%=maxtok$
+PROCredrawicon(choicesw%,13)
 PROCredrawicon(choicesw%,1) : PROCredrawicon(choicesw%,3) : PROCredrawicon(choicesw%,5)
 PROCsetselected(choicesw%,10,checkupd%)
 PROCsetselected(choicesw%,11,showusage%)
@@ -610,6 +617,7 @@ DEF PROCsetchoices(b%)
 key$=FNtrim(FNcstr(keybuf%))
 model$=FNtrim(FNcstr(modelbuf%))
 cert$=FNtrim(FNcstr(certbuf%))
+maxtok$=FNtrim(FNcstr(maxtokbuf%)) : IF VAL(maxtok$)<1 THEN maxtok$=""
 checkupd%=FNselected(choicesw%,10)
 showusage%=FNselected(choicesw%,11)
 IF model$="" THEN model$="claude-sonnet-5-5"
@@ -684,7 +692,7 @@ REM Write the JSON request body: model, token limit, whole history.
 DEF PROCwritereq
 LOCAL f%,p%,n%
 f%=OPENOUT req$
-PROCput(f%,"{""model"":"""+model$+""",""max_tokens"":4096,")
+PROCput(f%,"{""model"":"""+model$+""",""max_tokens"":"+STR$FNmaxtok+",")
 n%=FNloadinstructions
 IF n%>0 THEN PROCput(f%,"""system"":""") : PROCputesc(f%,resp%,n%) : PROCput(f%,""",")
 PROCput(f%,"""messages"":[")
@@ -750,6 +758,18 @@ ENDIF
 OSCLI "Filer_Run "+f$
 ENDPROC
 
+REM Max tokens to ask for: the Choices value, or defmaxtok% if empty.
+DEF FNmaxtok
+LOCAL n%
+n%=defmaxtok%
+IF VAL(maxtok$)>0 THEN n%=VAL(maxtok$)
+=n%
+
+REM Seconds to wait for a reply: longer replies take longer to write,
+REM so allow two minutes plus a second for every 50 tokens asked for.
+DEF FNwait
+=120+FNmaxtok DIV 50
+
 REM Write the curl config file. The API key lives here rather than on
 REM the command line; PROCdelscratch removes it after each request.
 DEF PROCwritecfg
@@ -764,7 +784,7 @@ PROCline(f%,"output = """+out$+"""")
 PROCline(f%,"stderr = """+err$+"""")
 PROCline(f%,"silent")
 PROCline(f%,"show-error")
-PROCline(f%,"max-time = 170")
+PROCline(f%,"max-time = "+STR$(FNwait-10))
 IF cert$<>"" THEN PROCline(f%,"cacert = """+cert$+"""")
 CLOSE#f%
 ENDPROC
@@ -1972,7 +1992,7 @@ LOCAL t%
 IF NOT busy% THEN ENDPROC
 IF FNlen(done$)>=0 THEN PROCfinish : ENDPROC
 SYS "OS_ReadMonotonicTime" TO t%
-IF t%-started%>18000 THEN PROCfail("No reply after three minutes. Check that curl is installed and on Run$Path.")
+IF t%-started%>FNwait*100 THEN PROCfail("No reply after "+STR$(FNwait DIV 60)+" minutes. Check that curl is installed and on Run$Path, or lower Max tokens in Choices.")
 ENDPROC
 
 REM Load curl's output and parse it.
@@ -2025,7 +2045,7 @@ PROChistend
 PROCclearatt
 PROCcountusage
 p%=FNfindkey("stop_reason",0)
-IF p%>=0 THEN IF FNmatch(p%,"max_tokens") THEN PROCdispbyte(3) : PROCdispstr("The reply reached the 4096-token limit and stopped early.")
+IF p%>=0 THEN IF FNmatch(p%,"max_tokens") THEN PROCdispbyte(3) : PROCdispstr("The reply reached the "+STR$FNmaxtok+"-token limit and stopped early. Raise Max tokens in Choices to allow longer replies.")
 ENDPROC
 
 REM Find "k$": "  in resp% from offset p%. Return the offset of the

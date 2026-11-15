@@ -2,6 +2,15 @@
 
 All notable changes to !Claude. Version numbers match `!Help` and the Info box.
 
+## 0.11 (13 Nov 2026)
+
+### Added
+- **Max tokens** in Choices: the longest reply Claude may write. Empty means the default of 4096. Raise it if replies stop early; a tester found 16000 fixed the long replies that were being cut short.
+
+### Changed
+- !Claude waits longer for longer replies: two minutes plus a second for every 50 tokens allowed, so about three and a half minutes at 4096 and seven at 16000.
+- The note shown when a reply stops early names the limit in use and points to Max tokens in Choices.
+
 ## 0.10 (10 Nov 2026)
 
 ### Added
